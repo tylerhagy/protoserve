@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Generated</title>
+<style>body{font-family:system-ui;padding:24px}.row{padding:8px;border-bottom:1px solid #eee}</style>
+</head>
+<body>
+<div id="list"></div>
+<script>
+  const meters = [{ id: 'M-1', reading: 412 }, { id: 'M-2', reading: 388 }];
+  document.getElementById('list').innerHTML = meters
+    .map((m) => `<div class="row meter-row"><span class="meter-id">${m.id}</span> used ${m.reading} kWh</div>`)
+    .join('');
+</script>
+</body></html>

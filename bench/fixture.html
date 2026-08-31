@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Ops Dashboard</title>
+<style>body{font-family:system-ui;margin:0}.nav{display:flex;gap:8px;padding:12px}
+.cards{display:flex;gap:12px;padding:16px}.card{border:1px solid #ddd;padding:16px;border-radius:8px}
+table{width:100%}.row td{padding:6px}</style></head>
+<body>
+<nav class="nav">
+<a class="nav-link" data-truth="n1" href="/overview">Overview</a>
+<a class="nav-link" data-truth="n2" href="/meters">Meters</a>
+<a class="nav-link" data-truth="n3" href="/billing">Billing</a>
+</nav>
+<div class="toolbar">
+<button class="icon-btn" data-truth="b1" aria-label="search"><svg class="i"></svg></button>
+<button class="icon-btn" data-truth="b2" aria-label="notifications"><svg class="i"></svg></button>
+<button class="btn" data-truth="b3">Apply</button>
+<button class="btn btn-ghost" data-truth="b4">Reset</button>
+</div>
+<section class="cards">
+<article class="card" data-truth="c1"><h3 data-truth="c1h">Revenue</h3><p class="price" data-truth="c1p">$1.2M</p></article>
+<article class="card" data-truth="c2"><h3 data-truth="c2h">Plan</h3><p class="price" data-truth="c2p">$10</p></article>
+<article class="card" data-truth="c3"><h3 data-truth="c3h">Plan</h3><p class="price" data-truth="c3p">$10</p></article>
+<article class="card" data-truth="c4"><h3 data-truth="c4h">Plan</h3><p class="price" data-truth="c4p">$10</p></article>
+</section>
+<table><tbody>
+<tr class="row" data-truth="r1"><td data-truth="r1a">Acme Co</td><td>412</td></tr>
+<tr class="row" data-truth="r2"><td data-truth="r2a">Globex</td><td>388</td></tr>
+<tr class="row alt" data-truth="r3"><td data-truth="r3a">Initech</td><td>401</td></tr>
+<tr class="row" data-truth="r4"><td data-truth="r4a">Umbrella</td><td>377</td></tr>
+</tbody></table>
+<ul class="todo">
+<li data-truth="t1">Confirm the meter reading</li>
+<li data-truth="t2">Email the supplier</li>
+<li data-truth="t3">Close the ticket</li>
+</ul>
+<article class="prose">
+<p data-truth="p1">Readings are captured every fifteen minutes and reconciled overnight.</p>
+<p data-truth="p2">Any gap longer than an hour is flagged for manual review.</p>
+<blockquote data-truth="q1">Accuracy beats speed here.</blockquote>
+</article>
+<form class="filters"><label for="q" data-truth="l1">Search</label><input id="q" name="q" placeholder="Find a meter"></form>
+</body></html>

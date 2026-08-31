@@ -1,0 +1,50 @@
+{
+  "name": "protoserve",
+  "version": "0.1.0",
+  "description": "Serve standalone HTML prototypes locally and leave inline comments on any element, then hand them to an AI coding agent to address.",
+  "keywords": [
+    "prototype",
+    "html",
+    "comments",
+    "design",
+    "review",
+    "claude",
+    "ai"
+  ],
+  "license": "MIT",
+  "author": "Tyler Hagy",
+  "type": "commonjs",
+  "bin": {
+    "protoserve": "bin/protoserve.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=60000 test/unit.test.js test/e2e.test.js",
+    "test:unit": "node --test test/unit.test.js",
+    "bench": "node bench/matrix.js"
+  },
+  "dependencies": {
+    "parse5": "^8.0.0",
+    "html-to-image": "^1.11.13"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tylerhagy/protoserve.git"
+  },
+  "homepage": "https://github.com/tylerhagy/protoserve#readme",
+  "bugs": {
+    "url": "https://github.com/tylerhagy/protoserve/issues"
+  }
+}

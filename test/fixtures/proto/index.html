@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Billing Prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #f6f7f9; }
+  .appbar { position: fixed; top: 0; left: 0; right: 0; height: 56px; background: #0b3d91;
+            color: #fff; display: flex; align-items: center; padding: 0 20px; z-index: 10; }
+  .wrap { padding: 80px 24px 400px; max-width: 720px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  .hint { color: #6b7280; }
+  button.cta { background: #0b3d91; color: #fff; border: 0; padding: 10px 16px; border-radius: 8px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs [role=tab] { padding: 6px 12px; border: 1px solid #e3e6ea; background: #fff; border-radius: 999px; }
+  .tabs [role=tab][aria-selected=true] { background: #0b3d91; color: #fff; }
+  dialog { border: 0; border-radius: 12px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+</style>
+</head>
+<body>
+<div class="appbar"><strong>Acme Billing</strong></div>
+<div class="wrap">
+  <div class="tabs">
+    <button role="tab" aria-selected="true" id="tab-overview">Overview</button>
+    <button role="tab" aria-selected="false" id="tab-history">History</button>
+  </div>
+  <div class="card" id="acct">
+    <h2>Account 4471</h2>
+    <p class="hint">Your next payment is due soon.</p>
+    <button class="cta" id="pay" onclick="window.__paid = true; document.title='PAID'">Pay now</button>
+  </div>
+  <div class="card" id="usage">
+    <h2>Usage</h2>
+    <p>You used <strong>412 kWh</strong> last month.</p>
+    <a href="/about.html" id="details">See details</a>
+  </div>
+  <div class="card" id="deep"><h2>Deep section</h2><p>Scrolled far down the page.</p></div>
+</div>
+<dialog id="confirm"><p>Confirm payment?</p><button id="close-modal">Close</button></dialog>
+<script>
+  document.getElementById('tab-history').onclick = function () {
+    this.setAttribute('aria-selected', 'true');
+    document.getElementById('tab-overview').setAttribute('aria-selected', 'false');
+  };
+  document.getElementById('close-modal').onclick = function () { document.getElementById('confirm').close(); };
+  window.openModal = function () { document.getElementById('confirm').showModal(); };
+</script>
+</body>
+</html>

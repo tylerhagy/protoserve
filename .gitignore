@@ -1,0 +1,4 @@
+node_modules/
+.protoserve/
+*.log
+.DS_Store
