@@ -49,6 +49,18 @@ Your browser opens. Then:
 
 ---
 
+### Keeping a server up
+
+`protoserve` runs in the foreground and stops with Ctrl+C, which is what you want at a terminal. It also means the server dies with whatever launched it — close the terminal, or let a CI step or an AI agent's task get torn down, and the server goes with it.
+
+```bash
+protoserve ./prototypes --detach
+```
+
+`--detach` starts it in its own session, reparented away from the caller, and returns as soon as it has bound the port. It prints the URL and pid, survives the shell that started it, and is stopped with `protoserve kill`.
+
+---
+
 ## Working with Claude Code
 
 Install the bundled skill once:
@@ -97,6 +109,18 @@ Everything an agent needs to act without asking you a follow-up question:
 | List button | All comments, filtered by Open / Resolved |
 
 Comment mode and the comment list survive a live reload, so when your agent edits the file mid-review you carry on where you were.
+
+### Switching prototypes
+
+The comment panel is titled with the prototype you're on and the number of open comments against it. When the folder holds more than one `.html`, that title is a menu: it lists every prototype with its own open count, so you can see where the feedback is before you jump. Serve a folder and you can work through a set of variants without going back to the index.
+
+### Pin colour
+
+Pins, the element highlight and the selector tag are drawn in one colour, chosen from the swatches at the bottom of the panel. The choice is stored in the browser, per origin — and the port is part of the origin, so if protoserve has to fall back from 8300 to 8301 (another instance already holds the port) you'll start from blue again on the new one.
+
+The default is blue, which is the wrong choice for a lot of prototypes — most design systems lean on blue, and blue pins disappear into a blue UI. Pick a colour your product doesn't use and the annotation layer stops competing with the thing you're annotating. Green and red aren't offered: this UI already spends them on resolved and delete.
+
+Changing it moves only the marks protoserve paints **on** your prototype. The panel's own chrome stays put.
 
 Every destructive action is undoable. Delete and resolve both show an **Undo** toast for eight seconds, and a deleted thread comes back with its id, number, replies and screenshot intact. Both are reachable from the pin, from inside the thread, and straight from the comment list on hover.
 

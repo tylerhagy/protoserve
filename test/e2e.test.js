@@ -218,9 +218,12 @@ test('resolving from the UI hides the pin and offers undo', async () => {
 });
 
 test('deleting from the UI removes it and undo brings it back intact', async () => {
-  await host('.ps-pin').first().click();
-  await host('.ps-card').waitFor({ timeout: 3000 });
+  // Addressed by comment, not by DOM position: pins are patched in place now, so their order in
+  // the shadow tree is creation order rather than a fresh render's list order. Nothing in the
+  // product depends on that order, and this test only ever wanted comment #1.
   const before = comments().find((c) => c.number === 1);
+  await host('.ps-pin[data-id="' + before.id + '"]').click();
+  await host('.ps-card').waitFor({ timeout: 3000 });
   await host('.ps-card .ps-icons button.danger').click();
   await page.waitForFunction(() => window.__protoserve.comments.length === 2, null, { timeout: 5000 });
   assert.strictEqual(comments().find((c) => c.number === 1), undefined);
@@ -260,7 +263,7 @@ test('a comment can be resolved and deleted straight from the list', async () =>
   await host('.ps-toast button').click();
   await page.waitForFunction((n) => window.__protoserve.comments.length === n, before, { timeout: 5000 });
   assert.ok(comments().find((c) => c.id === target.id), 'undo restored it');
-  await host('.ps-panel .ps-panel-title button').click();
+  await host('.ps-panel .ps-panel-title button.ps-x').click();
 });
 
 test('CLI resolve updates the live page without a reload', async () => {
@@ -553,4 +556,194 @@ test('the overlay stays usable above a native modal dialog', async () => {
     'the comment box accepts text even though the dialog makes the page inert');
   await page.keyboard.press('Escape');
   await page.evaluate(() => { const d = document.getElementById('confirm'); if (d.open) d.close(); });
+});
+
+/* --------------------------------------------------------------------------
+   Scope header — which prototype am I marking up, and what is on the others.
+   Replaces a <select> that sat in the panel footer, below the comment list.
+   -------------------------------------------------------------------------- */
+test('the panel titles itself with the prototype you are on, and its open count', async () => {
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { const d = document.getElementById('confirm'); if (d && d.open) d.close(); });
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  await host('.ps-panel').waitFor({ timeout: 5000 });
+  assert.strictEqual(await host('.ps-panel .ps-scope-name').textContent(), 'index.html',
+    'the title names the file, not the word "Comments"');
+  const shown = Number(await host('.ps-panel .ps-scope-n').textContent());
+  const open = comments().filter((c) => !c.parent_id && !c.resolved).length;
+  assert.strictEqual(shown, open, 'the count beside the name is the open count');
+  assert.strictEqual(await host('.ps-panel-foot select').count(), 0,
+    'the old footer dropdown is gone');
+});
+
+test('the scope menu lists the other prototypes with their own counts', async () => {
+  await host('.ps-panel button.ps-scope').click();
+  await host('.ps-menu').waitFor({ timeout: 5000 });
+  const names = await host('.ps-menu .ps-mname').allTextContents();
+  for (const f of ['index.html', 'about.html', 'generated.html']) {
+    assert.ok(names.includes(f), f + ' is offered in the menu');
+  }
+  assert.strictEqual(await host('.ps-menu button.on .ps-mname').textContent(), 'index.html',
+    'the file you are on is marked');
+  const row = host('.ps-menu button').filter({ hasText: 'index.html' }).first();
+  const open = comments().filter((c) => !c.parent_id && !c.resolved).length;
+  assert.strictEqual(await row.locator('.ps-scope-n').textContent(), String(open),
+    'each row carries the same count badge the header uses');
+  const empty = host('.ps-menu button').filter({ hasText: 'about.html' }).first();
+  assert.ok(await empty.locator('.ps-scope-n.none').count(),
+    'a prototype with nothing open shows the badge muted rather than hiding it');
+});
+
+/* --------------------------------------------------------------------------
+   Re-rendering must not look like the panel closed and reopened.
+   -------------------------------------------------------------------------- */
+test('using the panel does not restart its entrance animation', async () => {
+  await page.keyboard.press('Escape');
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  await host('.ps-panel').waitFor({ timeout: 5000 });
+  const mark = () => page.evaluate(() => {
+    const p = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-panel');
+    p.dataset.psKeep = '1';
+    return true;
+  });
+  const kept = () => page.evaluate(() => {
+    const p = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-panel');
+    return !!(p && p.dataset.psKeep === '1');
+  });
+  await mark();
+  await host('.ps-tabs button').nth(1).click();          // Resolved
+  assert.ok(await kept(), 'switching a tab patches the panel rather than replacing it');
+  await host('.ps-tabs button').nth(2).click();          // All
+  assert.ok(await kept(), 'and again');
+  await host('.ps-swatch').nth(1).click();
+  assert.ok(await kept(), 'picking a pin colour does not rebuild the panel');
+  await host('.ps-panel button.ps-scope').click();
+  assert.ok(await kept(), 'opening the scope menu does not rebuild the panel');
+  await page.keyboard.press('Escape');
+  await host('.ps-tabs button').nth(0).click();          // back to Open
+  await page.evaluate(() => localStorage.removeItem('protoserve:pin'));
+});
+
+test('a pin only animates when it first appears, not on every render', async () => {
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  await host('.ps-pin').first().waitFor({ timeout: 5000 });
+  await page.evaluate(() => {
+    document.getElementById('__protoserve_host').shadowRoot
+      .querySelectorAll('.ps-pin').forEach((p) => { p.dataset.psKeep = '1'; });
+  });
+  await host('.ps-tabs button').nth(2).click();          // All — re-renders everything
+  await page.waitForTimeout(120);
+  const survived = await page.evaluate(() => {
+    const pins = document.getElementById('__protoserve_host').shadowRoot.querySelectorAll('.ps-pin');
+    return pins.length > 0 && [].every.call(pins, (p) => p.dataset.psKeep === '1');
+  });
+  assert.ok(survived, 'pins are patched in place, so ps-pop does not replay on every render');
+  await host('.ps-tabs button').nth(0).click();
+});
+
+test('the scope menu dismisses without navigating, and switches when you pick another', async () => {
+  await page.keyboard.press('Escape');
+  assert.strictEqual(await host('.ps-menu').count(), 0, 'Escape closes the menu');
+  await host('.ps-panel button.ps-scope').click();
+  await host('.ps-menu').waitFor({ timeout: 5000 });
+  await page.mouse.click(400, 400);
+  await page.waitForTimeout(150);
+  assert.strictEqual(await host('.ps-menu').count(), 0, 'a click outside closes it');
+  assert.ok(page.url().endsWith('/index.html'), 'and closing it did not navigate anywhere');
+
+  await host('.ps-panel button.ps-scope').click();
+  await host('.ps-menu button').filter({ hasText: 'about.html' }).first().click();
+  await page.waitForURL('**/about.html', { timeout: 8000 });
+  await host('.ps-bar').waitFor({ timeout: 10000 });
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  assert.strictEqual(await host('.ps-panel .ps-scope-name').textContent(), 'about.html',
+    'the title follows you to the file you picked');
+  await page.goto(`http://localhost:${port}/index.html`);
+  await host('.ps-bar').waitFor({ timeout: 10000 });
+});
+
+/* --------------------------------------------------------------------------
+   Pin colour — the annotation layer must be able to get clear of whatever
+   colour the prototype itself uses. Blue prototypes made blue pins vanish.
+   -------------------------------------------------------------------------- */
+test('the pin colour is a choice, and it moves the pins without restyling the panel', async () => {
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  await host('.ps-panel .ps-swatches').waitFor({ timeout: 5000 });
+  assert.ok(await host('.ps-swatch').count() >= 4, 'several colours are offered as swatches');
+
+  const before = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('__protoserve_host').shadowRoot
+      .querySelector('.ps-root')).getPropertyValue('--ps-pin').trim());
+  const tabInk = () => page.evaluate(() =>
+    getComputedStyle(document.getElementById('__protoserve_host').shadowRoot
+      .querySelector('.ps-root')).getPropertyValue('--ps-accent').trim());
+  const accentBefore = await tabInk();
+
+  await host('.ps-swatch').nth(2).click();
+  await page.waitForTimeout(120);
+  const after = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('__protoserve_host').shadowRoot
+      .querySelector('.ps-root')).getPropertyValue('--ps-pin').trim());
+  assert.notStrictEqual(after, before, 'picking a swatch changes the pin colour');
+  assert.strictEqual(await tabInk(), accentBefore,
+    'and leaves --ps-accent alone — the panel chrome is not the annotation colour');
+  assert.strictEqual(await host('.ps-swatch.on').count(), 1, 'exactly one swatch reads as chosen');
+});
+
+test('the pin colour is a preference, so it survives a reload', async () => {
+  const chosen = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('__protoserve_host').shadowRoot
+      .querySelector('.ps-root')).getPropertyValue('--ps-pin').trim());
+  await page.reload();
+  await host('.ps-bar').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(200);
+  const restored = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('__protoserve_host').shadowRoot
+      .querySelector('.ps-root')).getPropertyValue('--ps-pin').trim());
+  assert.strictEqual(restored, chosen, 'the chosen colour is remembered across a reload');
+  await page.evaluate(() => localStorage.removeItem('protoserve:pin'));
+});
+
+/* The bug the first round of tests missed entirely: dismissal was wired to a document listener,
+   but guard.js binds on window (capture) and stops out-of-host clicks dead in comment mode, so
+   document never saw them. Every earlier test drove the menu with comment mode OFF. */
+test('the scope menu dismisses on an outside click while comment mode is on', async () => {
+  await page.keyboard.press('Escape');
+  if (!(await host('.ps-panel').count())) await host('.ps-bar button').nth(1).click();
+  await host('.ps-panel').waitFor({ timeout: 5000 });
+  await page.evaluate(() => window.__protoserve.setMode('inspect'));
+  await host('.ps-panel button.ps-scope').click();
+  await host('.ps-menu').waitFor({ timeout: 5000 });
+
+  await page.mouse.click(400, 400);
+  await page.waitForTimeout(200);
+  assert.strictEqual(await host('.ps-menu').count(), 0,
+    'a click on the prototype closes the menu even in comment mode');
+  assert.strictEqual(await host('.ps-card').count(), 0,
+    'and that dismissing click does NOT also open a compose card underneath it');
+  assert.ok(page.url().endsWith('/index.html'), 'and it did not navigate');
+
+  // one Escape is enough, because only one thing was ever opened
+  await page.evaluate(() => window.__protoserve.setMode('interact'));
+});
+
+test('the pin colours all carry white text at 4.5:1 or better', async () => {
+  const bad = await page.evaluate(() => {
+    const lum = (h) => {
+      const c = [1, 3, 5].map((i) => parseInt(h.substr(i, 2), 16) / 255);
+      const f = (x) => (x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4));
+      const [r, g, b] = c.map(f);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const host = document.getElementById('__protoserve_host').shadowRoot;
+    return [].map.call(host.querySelectorAll('.ps-swatch'), (s) => {
+      const m = /^#?([0-9a-f]{6})$/i.exec((s.style.background || '').trim())
+        || /rgb\((\d+), (\d+), (\d+)\)/.exec(getComputedStyle(s).backgroundColor);
+      const hex = m.length === 2 ? '#' + m[1]
+        : '#' + [1, 2, 3].map((i) => Number(m[i]).toString(16).padStart(2, '0')).join('');
+      return { hex, ratio: 1.05 / (lum(hex) + 0.05) };
+    }).filter((x) => x.ratio < 4.5);
+  });
+  assert.deepStrictEqual(bad, [],
+    'the pin number sits on the swatch colour at 11px/600 — none of them may fall under 4.5:1');
 });

@@ -23,6 +23,9 @@ Flags:
   -p, --port N      Port to serve on (default: 8300, auto-increments if busy)
       --host HOST   Host to bind (default: localhost)
       --no-open     Don't open a browser
+      --detach      Start the server in the background and return immediately.
+                    It survives the shell, terminal or agent that launched it;
+                    stop it with 'protoserve kill'. Prints the URL and pid.
   -h, --help        Show this help
   -v, --version     Show version
 
@@ -382,7 +385,7 @@ async function cmdKill(args) {
 }
 
 async function cmdServe(args) {
-  let port = 8300, host = 'localhost', open = true, given = null;
+  let port = 8300, host = 'localhost', open = true, given = null, detach = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '-p' || a === '--port') {
@@ -394,12 +397,48 @@ async function cmdServe(args) {
     }
     else if (a === '--host') host = args[++i] || host;
     else if (a === '--no-open') open = false;
+    else if (a === '--detach' || a === '-d') detach = true;
     else if (!a.startsWith('-')) given = a;
   }
   const input = path.resolve(given || process.cwd());
   if (!fs.existsSync(input)) fail(`No such file or folder: ${input}`);
   const isDir = fs.statSync(input).isDirectory();
   const root = isDir ? input : path.dirname(input);
+
+  /* --detach: re-exec ourselves in a new session and exit, so the server is not a child of the
+     caller any more. A server started from a terminal dies with that terminal, and one started by
+     an agent or a CI step dies when its task is reaped — which is exactly the failure this exists
+     to stop. detached:true gives the child its own process group and session leader, so a signal
+     sent to the launcher's group (or the group being torn down wholesale) never reaches it;
+     stdio:'ignore' and unref() cut the last two ties, the pipes and the event-loop reference. */
+  if (detach) {
+    const argv = process.argv.slice(2).filter((a) => a !== '--detach' && a !== '-d');
+    const child = require('child_process').spawn(
+      process.execPath, [require.main.filename || __filename].concat(argv),
+      { detached: true, stdio: 'ignore', cwd: process.cwd(), env: process.env }
+    );
+    child.unref();
+    // Wait for it to actually bind before claiming success — a detached child that dies on startup
+    // would otherwise be reported as a running server.
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const found = instances.read().find((i) => i.pid === child.pid);
+      if (found && await instances.verify(found, 500)) {
+        // the file's own URL, not the bare root — a folder of prototypes would otherwise land you
+        // on the index when you named a specific file
+        const at = isDir ? found.url + '/' : found.url + '/' + encodeURI(relKey(root, input));
+        process.stdout.write(
+          `protoserve ${VERSION} running detached\n` +
+          `  at   ${at}\n` +
+          `  pid  ${child.pid}\n\n` +
+          `It will outlive this shell. Stop it with: protoserve kill\n`
+        );
+        return;
+      }
+      if (Date.now() > deadline) fail('the detached server did not come up within 5s');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
 
   const server = createServer(root, { host });
   const actual = await listen(server, port, host);

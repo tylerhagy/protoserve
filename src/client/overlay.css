@@ -12,6 +12,13 @@
 
   --ps-accent: #0071e3;
   --ps-accent-ink: #ffffff;
+  /* The ANNOTATION colour: pins, the element highlight, the selector tag — everything protoserve
+     paints ON the prototype. Deliberately separate from --ps-accent, which is the panel's own
+     chrome. A design system that leans on blue (most do) makes blue pins vanish into the page, so
+     this is user-chosen and stored per browser; --ps-accent stays put. Overridden inline on
+     .ps-root, hence the fallback here rather than a hard value downstream. */
+  --ps-pin: #0071e3;
+  --ps-pin-ink: #ffffff;
   --ps-ink: #1d1d1f;
   --ps-ink-dim: #6e6e73;
   --ps-surface: rgba(255, 255, 255, 0.86);
@@ -88,14 +95,14 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
 }
 .ps-hi {
   position: fixed; pointer-events: none !important;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.95), 0 0 0 2.5px var(--ps-accent),
-              0 0 0 5.5px rgba(0, 113, 227, 0.16);
-  background: rgba(0, 113, 227, 0.06);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.95), 0 0 0 2.5px var(--ps-pin),
+              0 0 0 5.5px color-mix(in srgb, var(--ps-pin) 16%, transparent);
+  background: color-mix(in srgb, var(--ps-pin) 6%, transparent);
   transition: all 90ms var(--ps-ease);
 }
 .ps-tag {
   position: fixed; pointer-events: none !important;
-  background: var(--ps-accent); color: #fff; font-size: 10.5px; font-weight: 600;
+  background: var(--ps-pin); color: var(--ps-pin-ink); font-size: 10.5px; font-weight: 600;
   padding: 2.5px 7px; border-radius: 5px; white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -104,7 +111,7 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
 /* ---------------------------------------------------------------- pins */
 .ps-pin {
   position: fixed; width: 23px; height: 23px; border-radius: 999px 999px 999px 3px;
-  background: var(--ps-accent); color: var(--ps-accent-ink);
+  background: var(--ps-pin); color: var(--ps-pin-ink);
   font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 2px 9px rgba(0, 0, 0, 0.26), inset 0 0 0 1.5px rgba(255, 255, 255, 0.9);
@@ -113,7 +120,7 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
 }
 .ps-pin:hover { transform: scale(1.14); }
 .ps-pin.resolved { background: var(--ps-ink-dim); opacity: 0.62; }
-.ps-pin.active { box-shadow: 0 2px 9px rgba(0,0,0,0.26), inset 0 0 0 1.5px #fff, 0 0 0 4px rgba(0,113,227,0.24); }
+.ps-pin.active { box-shadow: 0 2px 9px rgba(0,0,0,0.26), inset 0 0 0 1.5px #fff, 0 0 0 4px color-mix(in srgb, var(--ps-pin) 24%, transparent); }
 .ps-pin.lost { background: #b8622a; }
 
 /* ---------------------------------------------------------------- cards */
@@ -126,7 +133,7 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
 }
 .ps-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .ps-num {
-  width: 20px; height: 20px; border-radius: 999px; background: var(--ps-accent); color: #fff;
+  width: 20px; height: 20px; border-radius: 999px; background: var(--ps-pin); color: var(--ps-pin-ink);
   font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums;
   display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
 }
@@ -180,8 +187,66 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
   box-shadow: var(--ps-lift), inset 0 0 0 0.5px var(--ps-hair);
   animation: ps-in 180ms var(--ps-ease);
 }
-.ps-panel-head { padding: 13px 14px 11px; border-bottom: 1px solid var(--ps-hair); flex: 0 0 auto; }
-.ps-panel-title { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 14px; }
+.ps-panel-head { padding: 11px 12px 11px 14px; border-bottom: 1px solid var(--ps-hair); flex: 0 0 auto; }
+.ps-panel-title { display: flex; align-items: center; gap: 6px; justify-content: space-between; font-weight: 600; font-size: 14px; }
+
+/* ---------------------------------------------------------------- scope
+   Which prototype am I marking up? It was a <select> in the panel footer, below the list, which
+   made the single most orienting fact on screen the least visible thing in the panel. It is now
+   the panel's title: the name you are on, the count on it, and — when the folder holds more than
+   one — a menu of the rest with their own counts, so switching is an informed move. */
+.ps-scope {
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto;
+  margin: -4px -6px; padding: 4px 6px; border-radius: 9px;
+  transition: background 140ms var(--ps-ease);
+}
+button.ps-scope:hover { background: var(--ps-hover); }
+.ps-scope-name {
+  font-weight: 600; font-size: 14px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ps-scope-chev { flex: 0 0 auto; color: var(--ps-ink-dim); display: flex; }
+.ps-scope-n {
+  flex: 0 0 auto; min-width: 18px; height: 18px; padding: 0 6px; border-radius: 999px;
+  background: var(--ps-pin); color: var(--ps-pin-ink);
+  font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ps-scope-n.none { background: var(--ps-hover); color: var(--ps-ink-dim); }
+.ps-menu {
+  /* capped against the PANEL, not a fixed 300px: .ps-panel is overflow:hidden and only
+     viewport-84px tall, so a fixed cap silently cut the menu's own scrollport on short windows */
+  position: absolute; top: 46px; left: 8px; right: 8px; z-index: 3; overflow-y: auto;
+  max-height: min(300px, calc(100% - 54px));
+  padding: 5px; border-radius: 12px; background: var(--ps-solid);
+  box-shadow: var(--ps-lift), inset 0 0 0 0.5px var(--ps-hair);
+  animation: ps-in 140ms var(--ps-ease); overscroll-behavior: contain;
+}
+.ps-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 7px 9px; border-radius: 8px; font-size: 12.5px; color: var(--ps-ink);
+  transition: background 140ms var(--ps-ease);
+}
+.ps-menu button:hover { background: var(--ps-hover); }
+.ps-menu button.on { font-weight: 600; }
+.ps-menu.settled { animation: none; }
+.ps-menu .ps-tick { flex: 0 0 auto; width: 13px; color: var(--ps-pin); display: flex; }
+.ps-menu .ps-mname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- pin colour
+   Six swatches, big enough to hit without aiming. Blue is the default and the first thing a
+   blue-heavy product needs to get away from, so the alternatives are what earn their place here. */
+.ps-swatches { display: flex; align-items: center; gap: 6px; }
+.ps-swatch {
+  width: 19px; height: 19px; border-radius: 999px; flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+  transition: transform 140ms var(--ps-ease), box-shadow 140ms var(--ps-ease);
+}
+.ps-swatch:hover { transform: scale(1.16); }
+.ps-swatch.on {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14),
+              0 0 0 2px var(--ps-solid), 0 0 0 3.5px currentColor;
+}
 .ps-tabs { display: flex; gap: 3px; margin-top: 11px; }
 .ps-tabs button {
   padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500; color: var(--ps-ink-dim);
@@ -195,7 +260,7 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
   transition: background 140ms var(--ps-ease);
 }
 .ps-item:hover { background: var(--ps-hover); }
-.ps-item.active { background: rgba(0, 113, 227, 0.11); }
+.ps-item.active { background: color-mix(in srgb, var(--ps-pin) 11%, transparent); }
 .ps-item .ps-body {
   font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
@@ -219,10 +284,6 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
   align-items: center; justify-content: space-between; flex: 0 0 auto;
 }
 .ps-file { font-size: 11.5px; color: var(--ps-ink-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ps-file select {
-  font: inherit; font-size: 11.5px; max-width: 190px; padding: 3px 6px; border-radius: 7px;
-  border: 1px solid var(--ps-hair); background: var(--ps-solid); color: inherit;
-}
 .ps-link { color: var(--ps-ink-dim); font-size: 11.5px; white-space: nowrap; }
 .ps-link:hover { color: var(--ps-red); }
 
@@ -254,7 +315,14 @@ textarea:focus { border-color: var(--ps-accent); box-shadow: 0 0 0 3.5px rgba(0,
 .ps-root[data-theme="dark"] .ps-hint,
 .ps-root[data-theme="dark"] .ps-toast { background: rgba(58, 58, 60, 0.86); }
 .ps-root[data-theme="dark"] .ps-tabs button.on { background: #f5f5f7; color: #1d1d1f; }
-.ps-root[data-theme="dark"] .ps-hi { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 0 2.5px var(--ps-accent), 0 0 0 5.5px rgba(10, 132, 255, 0.2); }
+.ps-root[data-theme="dark"] .ps-swatch { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22); }
+.ps-root[data-theme="dark"] .ps-swatch.on {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+              0 0 0 2px var(--ps-solid), 0 0 0 3.5px currentColor;
+}
+/* follows --ps-pin like the light rule does; it was left on --ps-accent, which put a blue ring
+   around a pin-coloured fill on exactly the dark, blue-heavy prototypes this feature is for */
+.ps-root[data-theme="dark"] .ps-hi { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 0 2.5px var(--ps-pin), 0 0 0 5.5px color-mix(in srgb, var(--ps-pin) 20%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {
   .ps-root *, .ps-root { animation: none !important; transition: none !important; }

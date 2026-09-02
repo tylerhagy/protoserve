@@ -19,6 +19,8 @@
   var elCache = new Map();
   var missGen = 0;
   var toastTimer = null;
+  var scopeOpen = false;   // the file menu in the panel header
+  var pinEls = new Map();  // comment id -> its pin element, kept across renders
 
   // Comment mode and the panel survive a live reload, so an agent editing the
   // file mid-review does not knock the user out of what they were doing.
@@ -31,6 +33,57 @@
       return raw === null ? fallback : JSON.parse(raw);
     } catch (e) { return fallback; }
   }
+  /* remember/recall are sessionStorage: they carry UI state across a live reload and are meant to
+     die with the tab. A PREFERENCE has to outlive the tab, so it gets localStorage instead. */
+  function keep(key, value) {
+    try { localStorage.setItem('protoserve:' + key, JSON.stringify(value)); } catch (e) { /* private mode */ }
+  }
+  function kept(key, fallback) {
+    try {
+      var raw = localStorage.getItem('protoserve:' + key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (e) { return fallback; }
+  }
+
+  /* Pin colours. Six, because the point is to get clear of whatever colour the prototype already
+     uses, and six well-separated hues do that without turning into a colour picker. Green and red
+     are absent on purpose: this UI already spends them on resolved and delete. Every one of these
+     carries white text at >=4.5:1, since the pin number sits on top of it and at 11px/600 it is not
+     large text. Measured, not assumed — orange and teal both started brighter and both failed
+     (3.51 and 3.95), so they are deepened here rather than left as a claim the code did not meet. */
+  var PIN_COLORS = [
+    { name: 'Blue',     hex: '#0071e3' },
+    { name: 'Violet',   hex: '#6c3ce9' },
+    { name: 'Magenta',  hex: '#d81b7a' },
+    { name: 'Orange',   hex: '#c25208' },
+    { name: 'Teal',     hex: '#0d7a76' },
+    { name: 'Graphite', hex: '#3a3a3c' }
+  ];
+  /* CFG.files arrives as [{name, open, resolved}]. Normalised here so a plain array of names (an
+     older server, a hand-built config) still renders rather than throwing. */
+  var scopes = (CFG.files || []).map(function (f) {
+    return typeof f === 'string' ? { name: f, open: 0, resolved: 0 } : f;
+  });
+  function refreshScopes() {
+    // nothing renders these unless the panel is open on a folder holding more than one prototype
+    if (scopes.length < 2 || !panelOpen) return Promise.resolve();
+    return fetch(BASE + '/files').then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.files) { scopes = d.files; render(); }
+    }).catch(function () { /* the names we already have still work */ });
+  }
+
+  /* Validated, not trusted: a value from an older build or a hand-edited entry would be handed
+     straight to setProperty, silently rejected as an invalid colour, and leave no swatch marked —
+     the pins would be blue with nothing in the UI saying why. */
+  var pinColor = (function () {
+    var stored = kept('pin', null);
+    return PIN_COLORS.some(function (c) { return c.hex === stored; }) ? stored : PIN_COLORS[0].hex;
+  })();
+  function applyPin() {
+    root.style.setProperty('--ps-pin', pinColor);
+    root.style.setProperty('--ps-pin-ink', '#ffffff');
+  }
+  function setPin(hex) { pinColor = hex; keep('pin', hex); applyPin(); render(); }
 
   var ICON = {
     cursor: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.9 8.9 0 01-3.8-.9L3 20.5l1.6-4.8A8.4 8.4 0 1121 11.5z"/></svg>',
@@ -41,6 +94,8 @@
     edit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>',
     reply: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 015 5v2"/></svg>',
     close: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+    chev: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+    tick: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
     camera: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>'
   };
 
@@ -436,6 +491,12 @@
     if (mode !== 'inspect' || inHost(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
+    /* In comment mode this IS the outside-click path for the scope menu. The document-level
+       listener below cannot serve it: guard.js binds on window (capture), which precedes document,
+       and stops the event dead before it ever reaches us. A dismissing click dismisses and does
+       nothing else — otherwise one click both closed the menu and opened a compose card under it,
+       leaving two things to Escape out of. */
+    if (scopeOpen) { scopeOpen = false; render(); return; }
     var sel = window.getSelection();
     if (sel && sel.rangeCount && !sel.isCollapsed && normText(sel.toString())) {
       var a = anchorFromSelection(sel);
@@ -505,10 +566,25 @@
   window.addEventListener('scroll', function () { if (mode === 'inspect') clearHover(); layoutPins(); }, true);
   window.addEventListener('resize', function () { clearHover(); layoutPins(); });
 
+  /* Clicks that reach document: everything inside our own host, plus clicks on the prototype while
+     comment mode is OFF. Comment mode's out-of-host clicks are handled in onClickCapture instead,
+     because guard.js stops them at window before document ever sees them. */
+  document.addEventListener('click', function (e) {
+    if (!scopeOpen) return;
+    var path = e.composedPath ? e.composedPath() : [];
+    for (var i = 0; i < path.length; i++) {
+      var el = path[i];
+      if (el && el.classList && (el.classList.contains('ps-menu') || el.classList.contains('ps-scope'))) return;
+    }
+    scopeOpen = false;
+    render();
+  }, true);
+
   document.addEventListener('keydown', function (e) {
     var t = (e.composedPath && e.composedPath()[0]) || e.target;
     var typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
     if (e.key === 'Escape') {
+      if (scopeOpen) { scopeOpen = false; render(); e.preventDefault(); e.stopImmediatePropagation(); return; }
       if (root.querySelector('.ps-card')) { closeCards(); e.preventDefault(); e.stopImmediatePropagation(); }
       else if (mode === 'inspect') { setMode('interact'); e.preventDefault(); e.stopImmediatePropagation(); }
       return;
@@ -834,7 +910,10 @@
         class: panelOpen ? 'on' : '',
         title: 'Toggle comment list',
         html: ICON.list + (total ? '<span class="ps-count">' + open + '</span>' : ''),
-        onclick: function () { panelOpen = !panelOpen; remember('panel', panelOpen); render(); }
+        onclick: function () {
+          panelOpen = !panelOpen; remember('panel', panelOpen); render();
+          if (panelOpen) refreshScopes();   // the gate above skips it while the panel is shut
+        }
       })
     ]);
     root.appendChild(bar);
@@ -860,26 +939,36 @@
     }, 3600);
   }
 
+  /* Pins are PATCHED, not rebuilt. Recreating them on every render replayed the ps-pop entrance
+     animation on every pin each time you touched a tab or a swatch, which read as the whole
+     annotation layer flickering. A pin now animates once, when its comment first appears. */
   function renderPins() {
-    var olds = root.querySelectorAll('.ps-pin');
-    for (var i = 0; i < olds.length; i++) olds[i].remove();
+    var live = Object.create(null);
     visibleRoots().forEach(function (c) {
-      var pin = h('button', {
-        class: 'ps-pin' + (c.resolved ? ' resolved' : '') + (activeId === c.id ? ' active' : ''),
-        text: String(c.number || '·'),
-        title: c.text.slice(0, 80),
-        onclick: function (e) { e.stopPropagation(); openThread(c.id); }
-      });
-      pin.dataset.id = c.id;
-      root.appendChild(pin);
+      live[c.id] = true;
+      var pin = pinEls.get(c.id);
+      if (!pin || !pin.isConnected) {
+        var id = c.id;
+        pin = h('button', { onclick: function (e) { e.stopPropagation(); openThread(id); } });
+        pin.dataset.id = id;
+        pinEls.set(id, pin);
+        // before the panel, so a pin created while the panel is open cannot land on top of it
+        root.insertBefore(pin, root.querySelector('.ps-panel'));
+      }
+      // .lost is owned by layoutPins, which runs immediately after and re-decides it
+      pin.className = 'ps-pin' + (c.resolved ? ' resolved' : '') + (activeId === c.id ? ' active' : '');
+      pin.textContent = String(c.number || '\u00b7');
+      pin.title = c.text.slice(0, 80);
+    });
+    pinEls.forEach(function (pin, id) {
+      if (!live[id]) { pin.remove(); pinEls.delete(id); }
     });
     layoutPins();
   }
 
   function renderPanel() {
-    var old = root.querySelector('.ps-panel');
-    if (old) old.remove();
-    if (!panelOpen) return;
+    var panel = root.querySelector('.ps-panel');
+    if (!panelOpen) { if (panel) panel.remove(); return; }
     var openCount = roots().filter(function (c) { return !c.resolved; }).length;
     var doneCount = roots().filter(function (c) { return c.resolved; }).length;
 
@@ -919,28 +1008,77 @@
       ]));
     });
 
+    /* The footer used to hold the file <select>; that moved up into the title, where the question
+       "which prototype is this?" actually belongs. What sits here now is the pin colour, which is
+       the one preference in this UI and reads better as a quiet row of swatches than as a menu. */
     var foot = h('div', { class: 'ps-panel-foot' });
-    if (CFG.files && CFG.files.length > 1) {
-      var sel = h('select', {
-        onchange: function (e) { location.href = '/' + e.target.value; }
-      });
-      CFG.files.forEach(function (f) {
-        var o = h('option', { value: f, text: f });
-        if (f === FILE) o.selected = true;
-        sel.appendChild(o);
-      });
-      foot.appendChild(h('span', { class: 'ps-file' }, [sel]));
-    } else {
-      foot.appendChild(h('span', { class: 'ps-file', text: FILE }));
-    }
+    var swatches = h('div', { class: 'ps-swatches' });
+    PIN_COLORS.forEach(function (c) {
+      swatches.appendChild(h('button', {
+        class: 'ps-swatch' + (c.hex === pinColor ? ' on' : ''),
+        style: 'background:' + c.hex + ';color:' + c.hex,
+        title: c.name + ' pins',
+        'aria-label': c.name + ' pins',
+        'aria-pressed': String(c.hex === pinColor),
+        onclick: function (e) { e.stopPropagation(); setPin(c.hex); }
+      }));
+    });
+    foot.appendChild(swatches);
     if (doneCount) {
       foot.appendChild(h('button', { class: 'ps-link', text: 'Delete ' + doneCount + ' resolved', onclick: deleteResolved }));
     }
 
-    root.appendChild(h('div', { class: 'ps-panel' }, [
+    var multi = scopes.length > 1;
+    var title = multi
+      ? h('button', {
+          class: 'ps-scope', title: FILE,
+          'aria-haspopup': 'true', 'aria-expanded': String(scopeOpen),
+          onclick: function (e) {
+            e.stopPropagation(); scopeOpen = !scopeOpen; render();
+            if (scopeOpen) refreshScopes();
+          }
+        }, [
+          h('span', { class: 'ps-scope-name', text: FILE }),
+          h('span', { class: 'ps-scope-n' + (openCount ? '' : ' none'), text: String(openCount) }),
+          h('span', { class: 'ps-scope-chev', html: ICON.chev })
+        ])
+      : h('div', { class: 'ps-scope', title: FILE }, [
+          h('span', { class: 'ps-scope-name', text: FILE }),
+          h('span', { class: 'ps-scope-n' + (openCount ? '' : ' none'), text: String(openCount) })
+        ]);
+
+    var menu = null;
+    if (multi && scopeOpen) {
+      menu = h('div', { class: 'ps-menu' });
+      scopes.forEach(function (f) {
+        var here = f.name === FILE;
+        menu.appendChild(h('button', {
+          class: here ? 'on' : '', title: f.name,
+          onclick: function (e) {
+            e.stopPropagation();
+            if (here) { scopeOpen = false; return render(); }
+            location.href = '/' + f.name.split('/').map(encodeURIComponent).join('/');
+          }
+        }, [
+          h('span', { class: 'ps-tick', html: here ? ICON.tick : '' }),
+          h('span', { class: 'ps-mname', text: f.name }),
+          /* the same badge as the header, deliberately — the count you rely on when you land on a
+             prototype is the count you want when deciding whether to go there at all. Muted at
+             zero rather than hidden, so the column stays scannable down the list. */
+          h('span', {
+            class: 'ps-scope-n' + (f.open ? '' : ' none'),
+            text: String(f.open),
+            title: f.open + ' open, ' + f.resolved + ' resolved'
+          })
+        ]));
+      });
+    }
+
+    var kids = [
+      menu,
       h('div', { class: 'ps-panel-head' }, [
         h('div', { class: 'ps-panel-title' }, [
-          h('span', { text: 'Comments' }),
+          title,
           h('button', { class: 'ps-x', html: ICON.close, title: 'Close', onclick: function () { panelOpen = false; remember('panel', false); render(); } })
         ]),
         h('div', { class: 'ps-tabs' }, [
@@ -951,7 +1089,24 @@
       ]),
       list,
       foot
-    ]));
+    ].filter(Boolean);
+
+    /* The panel ELEMENT survives a re-render; only its contents are swapped. Rebuilding the whole
+       thing re-ran `animation: ps-in` every time, so switching a tab, opening the scope menu or
+       picking a swatch made the panel visibly blink out and back — it looked like it had closed and
+       reopened. Keeping the node means the entrance plays once, on open. The list's scroll position
+       is carried over for the same reason: a re-render is not a reason to lose your place. */
+    if (panel) {
+      var prevList = panel.querySelector('.ps-list');
+      var scrolled = prevList ? prevList.scrollTop : 0;
+      // a menu that was already up must not re-animate underneath a click that did not close it
+      if (menu && panel.querySelector('.ps-menu')) menu.classList.add('settled');
+      while (panel.firstChild) panel.removeChild(panel.firstChild);
+      kids.forEach(function (k) { panel.appendChild(k); });
+      list.scrollTop = scrolled;
+    } else {
+      root.appendChild(h('div', { class: 'ps-panel' }, kids));
+    }
   }
 
   function render() {
@@ -977,8 +1132,11 @@
       es.addEventListener('comments', function (ev) {
         try {
           var d = JSON.parse(ev.data || '{}');
-          if (d.file && d.file !== FILE) return;
+          /* another file's comments changed: our own list is unaffected, but the scope menu's
+             counts are not, so refresh those and stop there. */
+          if (d.file && d.file !== FILE) { refreshScopes(); return; }
         } catch (e) { /* refresh anyway */ }
+        refreshScopes();
         refresh();
       });
     } catch (e) { /* live updates unavailable */ }
@@ -986,9 +1144,11 @@
 
   function boot() {
     mount();
+    applyPin();
     panelOpen = recall('panel', false) === true;
     if (recall('mode', 'interact') === 'inspect') setMode('inspect');
     refresh();
+    refreshScopes();
     connect();
     var tick = 0;
     setInterval(function () {

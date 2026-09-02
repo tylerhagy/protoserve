@@ -107,6 +107,32 @@ function createServer(root, opts) {
   try { realRoot = fs.realpathSync(root); } catch { /* use the literal path */ }
 
   const store = new Store(root);
+
+  /* Every .html under the root, each with its open/resolved tallies. The panel's scope switcher
+     shows the counts beside the names, so picking a prototype is an informed choice rather than a
+     blind jump — which is the whole reason it is worth more than a filename dropdown. One store
+     read serves the lot; the client re-fetches via /__protoserve/files when it opens the menu. */
+  function fileScopes() {
+    /* ONE store read for the whole listing. store.list() loads and parses comments.json on every
+       call, so mapping it over the file list re-read the same file once per prototype — 40 reads
+       per page load in a 40-file folder, and again on every /files fetch, which every connected
+       client now makes on every comments event. */
+    let data;
+    try { data = store.load(); }
+    catch { data = null; }                         // an unreadable store must not break the switcher
+    return listHtml(root, root, 0, [], contained).map((name) => {
+      let open = 0, resolved = 0;
+      if (data) {
+        const b = data.files && data.files[name];
+        const list = b && Array.isArray(b.comments) ? b.comments : [];
+        for (const c of list) {
+          if (c && c.parent_id) continue;          // replies are not comments in their own right
+          if (c && c.resolved) resolved++; else open++;
+        }
+      }
+      return { name, open, resolved };
+    });
+  }
   const clients = new Set();
   const served = new Set(); // files we have actually handed out, for reload decisions
   const overlayCss = () => fs.readFileSync(path.join(CLIENT_DIR, 'overlay.css'), 'utf8');
@@ -151,7 +177,7 @@ function createServer(root, opts) {
       return send(res, 500, 'text/plain',
         `protoserve could not parse ${file}:\n${e.message}\n\nThe file itself is untouched.`);
     }
-    const cfg = { file, files: listHtml(root, root, 0, [], contained), css: overlayCss() };
+    const cfg = { file, files: fileScopes(), css: overlayCss() };
     const tag =
       `<script data-protoserve="guard">${guardJs()}</script>` +
       `<script data-protoserve="config">window.__PS=${JSON.stringify(cfg).replace(/</g, '\\u003c')}</script>` +
@@ -204,6 +230,10 @@ function createServer(root, opts) {
     // ---- internal endpoints
     if (pathname === '/__protoserve/ping') {
       return sendJson(res, 200, { protoserve: true, pid: process.pid, root });
+    }
+    if (pathname === '/__protoserve/files') {
+      if (req.method !== 'GET') return send(res, 405, 'text/plain', 'Method not allowed');
+      return sendJson(res, 200, { files: fileScopes() });
     }
     if (pathname === '/__protoserve/overlay.js') {
       return send(res, 200, MIME['.js'], overlayJs());
