@@ -562,6 +562,39 @@
       }, true);
     });
   }
+  /* Whatever card is open owns the keys while you are typing in it. These live here rather than on
+     the textarea because the guard stops key events at window — ahead of the prototype's shortcuts,
+     and therefore ahead of our own listeners too — and calls this instead. */
+  var cardKeys = null;
+  var FIELD_EVENTS = ['keydown', 'keyup', 'keypress', 'beforeinput', 'input',
+    'compositionstart', 'compositionupdate', 'compositionend', 'paste', 'cut', 'copy'];
+  function inField(e) {
+    if (!inHost(e)) return false;
+    var p = e.composedPath ? e.composedPath() : [];
+    var t = p.length ? p[0] : e.target;
+    if (!t || t.nodeType !== 1) return false;
+    var n = t.localName || '';
+    return n === 'textarea' || n === 'input' || t.isContentEditable === true;
+  }
+  function onFieldKey(e) {
+    if (e.type !== 'keydown') return;
+    if (e.key === 'Escape') { closeCards(); e.preventDefault(); return; }
+    if (cardKeys) cardKeys(e);
+  }
+  if (window.__psGuard) {
+    window.__psGuard.onKey = onFieldKey;
+  } else {
+    // No guard: same job, one caveat — a page script that loaded before us and registered its own
+    // capture listener on window would still get the keystroke first.
+    FIELD_EVENTS.forEach(function (t) {
+      window.addEventListener(t, function (e) {
+        if (!inField(e)) return;
+        e.stopImmediatePropagation();   // never preventDefault: the character must still be typed
+        onFieldKey(e);
+      }, true);
+    });
+  }
+
   window.addEventListener('mousemove', onMove, true);
   window.addEventListener('scroll', function () { if (mode === 'inspect') clearHover(); layoutPins(); }, true);
   window.addEventListener('resize', function () { clearHover(); layoutPins(); });
@@ -633,22 +666,61 @@
     return roots().filter(function (c) { return filter === 'all' || (filter === 'open' ? !c.resolved : c.resolved); });
   }
 
+  /* Where a comment's anchor is, right now. Two different absences get confused if this answers a
+     bare yes/no. A prototype that swaps screens inside ONE file leaves the anchor in the document
+     and merely hides it: that is 'away', and the pin comes off the canvas, because a pin hovering
+     over a screen the comment was never made on is worse than no pin at all. 'lost' is the other
+     case — the element is not in the document any more, usually because an edit removed it — and
+     that one the reviewer does need told about, so it keeps the parked marker. */
+  function placement(c) {
+    var el = findEl(c);
+    if (!el) return 'lost';
+    return isVisible(el) ? 'here' : 'away';
+  }
+  function placements() {
+    var out = Object.create(null);
+    visibleRoots().forEach(function (c) { out[c.id] = placement(c); });
+    return out;
+  }
+
+  /* The pin goes away with its screen; the panel row must not, or the comment reads as deleted. It
+     stays listed, dimmed, and says which of the two absences it is. */
+  var WHERE = { away: 'on another screen', lost: 'element no longer on the page' };
+  function syncRows(state) {
+    var items = root.querySelectorAll('.ps-item');
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var w = state[it.getAttribute('data-id')] || 'here';
+      it.classList.toggle('off', w !== 'here');
+      var note = it.querySelector('.ps-where');
+      if (note) note.textContent = w === 'here' ? '' : ' · ' + WHERE[w];
+    }
+  }
+
   function layoutPins() {
     var pins = root.querySelectorAll('.ps-pin');
     var taken = [];
     var lost = 0;
+    var state = placements();
     for (var i = 0; i < pins.length; i++) {
       var pin = pins[i];
       var c = null;
       for (var k = 0; k < comments.length; k++) if (comments[k].id === pin.dataset.id) { c = comments[k]; break; }
       if (!c) { pin.style.display = 'none'; continue; }
+      var where = state[c.id] || placement(c);
+      if (where === 'away') {
+        // Another screen of this same file. The panel still lists it; the canvas stays clean.
+        pin.classList.remove('lost');
+        pin.style.display = 'none';
+        continue;
+      }
       var el = findEl(c);
-      if (!el || !isVisible(el)) {
+      if (where === 'lost' || !el) {
         pin.classList.add('lost');
         pin.style.display = 'flex';
         pin.style.left = '8px';
         pin.style.top = (56 + lost * 28) + 'px';
-        pin.title = 'Not on screen right now — comment ' + (c.number ? '#' + c.number : '');
+        pin.title = 'Anchor is gone from the page — comment ' + (c.number ? '#' + c.number : '');
         lost++;
         continue;
       }
@@ -673,12 +745,14 @@
       pin.style.top = y + 'px';
       pin.title = c.text.slice(0, 80);
     }
+    syncRows(state);
   }
 
   // ---------------------------------------------------------------- cards
   function closeCards() {
     var cards = root.querySelectorAll('.ps-card');
     for (var i = 0; i < cards.length; i++) cards[i].remove();
+    cardKeys = null;
     activeId = null;
     renderPanel();
     renderPins();
@@ -736,9 +810,12 @@
       });
     }
     btn.addEventListener('click', submit);
-    ta.addEventListener('keydown', function (e) {
+    function onKey(e) {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
-    });
+    }
+    // Both: the guard route normally fires, the direct one is the fallback if it never runs.
+    cardKeys = onKey;
+    ta.addEventListener('keydown', onKey);
     place(card, rect);
     ta.focus();
   }
@@ -825,9 +902,11 @@
         .catch(function (e) { btn.disabled = false; toast('Could not save: ' + e.message); });
     }
     btn.addEventListener('click', save);
-    ta.addEventListener('keydown', function (e) {
+    function onKey(e) {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
-    });
+    }
+    cardKeys = onKey;
+    ta.addEventListener('keydown', onKey);
     place(card, rect);
     ta.focus();
   }
@@ -1002,7 +1081,11 @@
         h('div', {}, [
           h('div', { class: 'ps-body', text: c.text }),
           anchorEl(c.anchor),
-          h('div', { class: 'ps-meta', text: ago(c.created_at) + (replies ? ' · ' + replies + ' repl' + (replies > 1 ? 'ies' : 'y') : '') })
+          h('div', { class: 'ps-meta' }, [
+            h('span', { text: ago(c.created_at) + (replies ? ' · ' + replies + ' repl' + (replies > 1 ? 'ies' : 'y') : '') }),
+            /* filled in by syncRows when the anchor is not on the screen being looked at */
+            h('span', { class: 'ps-where' })
+          ])
         ]),
         actions
       ]));
@@ -1107,6 +1190,8 @@
     } else {
       root.appendChild(h('div', { class: 'ps-panel' }, kids));
     }
+    // rows are built fresh here, so the off-screen marking has to be re-applied to them
+    syncRows(placements());
   }
 
   function render() {
@@ -1142,6 +1227,38 @@
     } catch (e) { /* live updates unavailable */ }
   }
 
+  /* A single-file prototype changes screens by flipping a class or a style, and nothing announces
+     it. Without watching for that, a pin belonging to the screen you just left would hang around
+     until the next half-second tick — which is exactly long enough to read as a bug. Attribute
+     churn is cheap to re-lay-out; a childList change may have built the anchor we had given up on,
+     so only that case retries missed anchors. */
+  var domPending = false;
+  function watchDom() {
+    if (typeof MutationObserver !== 'function') return;
+    var ob = new MutationObserver(function (records) {
+      var touched = false, structural = false;
+      for (var i = 0; i < records.length; i++) {
+        var t = records[i].target;
+        if (t === host || (host.contains && host.contains(t))) continue; // our own UI
+        touched = true;
+        if (records[i].type === 'childList') structural = true;
+      }
+      if (!touched || domPending) return;
+      domPending = true;
+      requestAnimationFrame(function () {
+        domPending = false;
+        if (structural) missGen++;
+        layoutPins();
+      });
+    });
+    try {
+      ob.observe(document.documentElement, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'open', 'data-active', 'data-screen', 'data-page']
+      });
+    } catch (e) { /* the tick still catches up within 500ms */ }
+  }
+
   function boot() {
     mount();
     applyPin();
@@ -1150,6 +1267,7 @@
     refresh();
     refreshScopes();
     connect();
+    watchDom();
     var tick = 0;
     setInterval(function () {
       tick++;

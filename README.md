@@ -126,6 +126,16 @@ Every destructive action is undoable. Delete and resolve both show an **Undo** t
 
 While comment mode is on, clicks are intercepted so buttons don't fire and links don't navigate. Turn it off to click through your prototype normally, get to the state you care about — a modal, step 3 of a flow, an error — then turn it back on and comment there. The state travels with the comment.
 
+Keys are intercepted too, but only while you're typing in a comment box. Prototypes often bind bare letters as shortcuts, and those shortcuts sit on `document` — so without this, writing "delete this row" would run whatever `d`, `t` and `l` are wired to on the way through. While the caret is in a comment, your prototype hears nothing: no `keydown`, no `input`, no paste. Click away and it has the keyboard back.
+
+### Prototypes with more than one screen
+
+Separate `.html` files each keep their own comments, so navigating between them swaps the whole set.
+
+A single file that swaps screens with JavaScript is the more common shape, and there pins follow the screen they were left on. Comment on the list view, switch to the detail view, and that pin comes off the canvas — it would otherwise float over a screen the comment was never about. The comment is still there: the panel keeps listing it, dimmed, marked *on another screen*, and still counted as open. Go back and the pin returns where it was.
+
+That's different from a pin protoserve parks at the left edge. Parked means the element itself is **gone from the page** — usually your agent just rewrote the markup out from under the comment — and it's worth knowing about.
+
 ---
 
 ## CLI

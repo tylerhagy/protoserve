@@ -29,7 +29,7 @@ const indexPath = () => path.join(root, 'index.html');
 
 test.before(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'protoserve-e2e-'));
-  for (const f of ['index.html', 'about.html', 'generated.html']) {
+  for (const f of ['index.html', 'about.html', 'generated.html', 'screens.html']) {
     fs.copyFileSync(path.join(__dirname, 'fixtures/proto', f), path.join(root, f));
   }
   store = new Store(root);
@@ -746,4 +746,124 @@ test('the pin colours all carry white text at 4.5:1 or better', async () => {
   });
   assert.deepStrictEqual(bad, [],
     'the pin number sits on the swatch colour at 11px/600 — none of them may fall under 4.5:1');
+});
+
+/* ---------------------------------------------------------------------------------------------
+   One HTML file, several "screens". Separate .html files already behave: each is its own comment
+   bucket, so navigating swaps the whole set. Inside one file nothing swaps, and both of the
+   behaviours below were wrong because of it. A second page keeps this fixture's state clear of the
+   shared one above. */
+let sp = null;
+const shost = (sel) => sp.locator('#__protoserve_host ' + sel);
+const screenComments = () => store.list('screens.html');
+
+async function screensPage() {
+  if (sp) return sp;
+  sp = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+  await sp.goto(`http://localhost:${port}/screens.html`);
+  await sp.locator('#__protoserve_host .ps-bar').waitFor({ timeout: 10000 });
+  return sp;
+}
+
+test('typing a comment never reaches the prototype\'s own keyboard shortcuts', async () => {
+  await screensPage();
+  await sp.evaluate(() => window.__protoserve.setMode('inspect'));
+  await sp.click('#row-a');
+  await shost('.ps-card textarea').waitFor({ timeout: 5000 });
+
+  await sp.evaluate(() => { window.__keys = []; });
+  // Every letter here is a shortcut in the fixture: d jumps to the detail screen, l comes back.
+  await sp.keyboard.type('delete this line, please');
+
+  const seen = await sp.evaluate(() => window.__keys);
+  assert.deepStrictEqual(seen, [], 'the prototype saw not one key, up, press or input event');
+  assert.strictEqual(
+    await shost('.ps-card textarea').inputValue(), 'delete this line, please',
+    'and every character still landed in the comment box');
+  assert.strictEqual(
+    await sp.evaluate(() => document.querySelector('.screen.on').id), 'screen-list',
+    'the prototype did not change screens underneath the comment');
+});
+
+test('the card\'s own shortcuts still work while the page\'s are blocked', async () => {
+  await screensPage();
+  await sp.keyboard.press('Escape');
+  await sp.waitForTimeout(150);
+  assert.strictEqual(await shost('.ps-card').count(), 0, 'Escape still cancels the card');
+
+  const before = screenComments().length;
+  await sp.click('#row-a');
+  await shost('.ps-card textarea').waitFor({ timeout: 5000 });
+  await sp.keyboard.type('this row should be a link');
+  await sp.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
+  await sp.waitForFunction(() => !document.getElementById('__protoserve_host')
+    .shadowRoot.querySelector('.ps-card'), null, { timeout: 5000 });
+  assert.strictEqual(screenComments().length, before + 1, 'Cmd/Ctrl+Enter still saved it');
+  await sp.evaluate(() => window.__protoserve.setMode('interact'));
+});
+
+test('a pin leaves the canvas when its screen does, and comes back with it', async () => {
+  await screensPage();
+  await shost('.ps-pin').first().waitFor({ timeout: 5000 });
+  const pin = () => sp.evaluate(() => {
+    const p = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-pin');
+    return { display: getComputedStyle(p).display, lost: p.classList.contains('lost') };
+  });
+
+  assert.strictEqual((await pin()).display, 'flex', 'shown while its own screen is up');
+
+  await sp.evaluate(() => window.show('screen-detail'));
+  await sp.waitForFunction(() => getComputedStyle(document.getElementById('__protoserve_host')
+    .shadowRoot.querySelector('.ps-pin')).display === 'none', null, { timeout: 3000 });
+  assert.strictEqual((await pin()).lost, false,
+    'hidden, not parked — the anchor is fine, it is simply on another screen');
+
+  await sp.evaluate(() => window.show('screen-list'));
+  await sp.waitForFunction(() => getComputedStyle(document.getElementById('__protoserve_host')
+    .shadowRoot.querySelector('.ps-pin')).display !== 'none', null, { timeout: 3000 });
+  assert.strictEqual((await pin()).display, 'flex', 'and it returns with its screen');
+});
+
+test('an off-screen comment stays in the panel, dimmed and labelled', async () => {
+  await screensPage();
+  if (!(await shost('.ps-panel').count())) await shost('.ps-bar button').nth(1).click();
+  await shost('.ps-panel .ps-item').first().waitFor({ timeout: 5000 });
+
+  const row = () => sp.evaluate(() => {
+    const it = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-item');
+    return {
+      off: it.classList.contains('off'),
+      where: (it.querySelector('.ps-where') || {}).textContent || '',
+      count: document.getElementById('__protoserve_host').shadowRoot
+        .querySelectorAll('.ps-item').length
+    };
+  });
+
+  const here = await row();
+  assert.strictEqual(here.off, false);
+  assert.strictEqual(here.where, '', 'no note while you are looking at its screen');
+
+  await sp.evaluate(() => window.show('screen-detail'));
+  await sp.waitForFunction(() => document.getElementById('__protoserve_host')
+    .shadowRoot.querySelector('.ps-item').classList.contains('off'), null, { timeout: 3000 });
+  const away = await row();
+  assert.match(away.where, /another screen/, 'it says why the pin is not there');
+  assert.strictEqual(away.count, here.count, 'and the row is still listed — nothing disappeared');
+
+  await sp.evaluate(() => window.show('screen-list'));
+});
+
+test('a comment whose element is deleted outright is still parked, not hidden', async () => {
+  await screensPage();
+  await sp.evaluate(() => { const el = document.getElementById('row-a'); el.parentNode.removeChild(el); });
+  await sp.waitForFunction(() => document.getElementById('__protoserve_host')
+    .shadowRoot.querySelector('.ps-pin').classList.contains('lost'), null, { timeout: 8000 });
+  const state = await sp.evaluate(() => {
+    const p = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-pin');
+    const it = document.getElementById('__protoserve_host').shadowRoot.querySelector('.ps-item');
+    return { display: getComputedStyle(p).display, title: p.title, where: it.querySelector('.ps-where').textContent };
+  });
+  assert.strictEqual(state.display, 'flex', 'a lost anchor is worth telling the reviewer about');
+  assert.match(state.title, /gone from the page/);
+  assert.match(state.where, /no longer on the page/);
 });

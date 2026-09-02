@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screens Prototype</title>
+<style>
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #fff; }
+  .screen { display: none; padding: 40px; }
+  .screen.on { display: block; }
+  .row { padding: 14px; border: 1px solid #dcdfe4; border-radius: 8px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<!-- One file, two "pages": the shape almost every generated prototype takes. -->
+<div class="screen on" id="screen-list">
+  <h1 id="list-title">Invoices</h1>
+  <div class="row" id="row-a">Invoice 1001</div>
+</div>
+<div class="screen" id="screen-detail">
+  <h1 id="detail-title">Invoice 1001</h1>
+  <div class="row" id="row-b">Line item</div>
+</div>
+<script>
+  window.__keys = [];
+  window.show = function (id) {
+    var s = document.querySelectorAll('.screen');
+    for (var i = 0; i < s.length; i++) s[i].classList.toggle('on', s[i].id === id);
+  };
+  // The kind of shortcut a prototype carries: bare letters, bound on document.
+  document.addEventListener('keydown', function (e) {
+    window.__keys.push(e.key);
+    if (e.key === 'd') window.show('screen-detail');
+    if (e.key === 'l') window.show('screen-list');
+  });
+  // And one bound at window capture — registered after guard.js, which is injected into <head>.
+  window.addEventListener('keydown', function (e) { window.__keys.push('capture:' + e.key); }, true);
+  ['keyup', 'keypress', 'input', 'beforeinput', 'paste'].forEach(function (t) {
+    document.addEventListener(t, function () { window.__keys.push(t); });
+  });
+</script>
+</body>
+</html>

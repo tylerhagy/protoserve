@@ -265,6 +265,14 @@ button.ps-scope:hover { background: var(--ps-hover); }
   font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .ps-item > div:nth-child(2) { min-width: 0; flex: 1 1 auto; }
+/* The comment is still open and still counted — it just belongs to a screen that is not on show.
+   Dimmed rather than hidden: a row that vanishes when you navigate reads as a deleted comment.
+   The number keeps full contrast so the list stays countable at a glance. */
+.ps-item.off { opacity: 0.58; }
+.ps-item.off:hover { opacity: 1; }
+.ps-item.off .ps-num { opacity: 1; }
+.ps-where:empty { display: none; }
+.ps-where { font-style: italic; }
 .ps-row-actions {
   display: flex; gap: 1px; margin-left: auto; flex: 0 0 auto;
   opacity: 0; transition: opacity 120ms var(--ps-ease);
