@@ -84,17 +84,25 @@ function annotate(html) {
  * change the string's length (U+0130).
  */
 function injectScript(html, scriptTag) {
-  const head = /<head(\s[^>]*)?>/i.exec(html);
-  if (head) {
-    const at = head.index + head[0].length;
-    return html.slice(0, at) + '\n' + scriptTag + html.slice(at);
-  }
-  const htmlTag = /<html(\s[^>]*)?>/i.exec(html);
-  if (htmlTag) {
-    const at = htmlTag.index + htmlTag[0].length;
-    return html.slice(0, at) + '\n' + scriptTag + html.slice(at);
-  }
-  return scriptTag + '\n' + html;
+  // Find the REAL start tags with the parser, not with a regex over the text: a
+  // page whose own JavaScript contains the string '<html>' (an export that
+  // rebuilds the document, say) and which has no explicit <head> would
+  // otherwise get the tag spliced into the middle of that string.
+  const doc = parseDoc(html);
+  const explicit = (tag) => {
+    const n = findTag(doc, tag);
+    return n && n.sourceCodeLocation && n.sourceCodeLocation.startTag
+      ? n.sourceCodeLocation.startTag.endOffset : -1;
+  };
+  let at = explicit('head');
+  if (at < 0) at = explicit('html');
+  if (at >= 0) return html.slice(0, at) + '\n' + scriptTag + html.slice(at);
+  // Neither is written out (an implied head): go straight after the doctype if
+  // there is one, else the very top — still before any of the page's scripts.
+  const dt = (doc.childNodes || []).find((n) => n.nodeName === '#documentType');
+  if (!dt || !dt.sourceCodeLocation) return scriptTag + '\n' + html;
+  const end = dt.sourceCodeLocation.endOffset;
+  return html.slice(0, end) + '\n' + scriptTag + html.slice(end);
 }
 
 module.exports = { annotate, injectScript, parseDoc, walk, findTag, isElement, elementChildren, LOC_ATTR };

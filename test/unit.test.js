@@ -446,3 +446,10 @@ test('the third of four identical cards is found by its position after an edit',
   assert.strictEqual(r.line, 5, 'the third card, not the second or fourth');
   assert.strictEqual(r.verified, true, 'the list is unchanged, so this is certain');
 });
+
+test('injectScript ignores an <html> that only appears inside a script string', () => {
+  const page = '<!doctype html>\n<title>t</title>\n<script>const x = "<html>";</script>\n<p>x</p>';
+  const out = injectScript(page, '<script>1</script>');
+  assert.ok(out.includes('const x = "<html>";'), 'the page\'s own string is untouched');
+  assert.ok(out.indexOf('<script>1</script>') < out.indexOf('const x'), 'injected before the page script');
+});
