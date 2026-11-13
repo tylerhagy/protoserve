@@ -205,7 +205,11 @@ class Store {
       const b = this.bucket(data, key);
       const c = b.comments.find((x) => x.id === id);
       if (!c) return null;
-      if (typeof patch.text === 'string') c.text = patch.text;
+      if (typeof patch.text === 'string') {
+        // A thread that changed after it was sent has to be sent again.
+        if (patch.text !== c.text) delete c.sent_at;
+        c.text = patch.text;
+      }
       if (typeof patch.resolved === 'boolean') {
         c.resolved = patch.resolved;
         c.resolved_at = patch.resolved ? new Date().toISOString() : null;
@@ -214,6 +218,42 @@ class Store {
       c.updated_at = new Date().toISOString();
       this.save(data);
       return c;
+    });
+  }
+
+  /**
+   * Hand open top-level comments to the agent. Nothing is sent until someone asks: a comment only
+   * gets `sent_at` here, and `protoserve watch --sent` is what turns that into work. Returns the
+   * comments that were newly sent; already-sent, resolved and reply rows are left alone.
+   */
+  markSent(key, ids) {
+    return this.withLock(() => {
+      const data = this.load();
+      const b = this.bucket(data, key);
+      const want = Array.isArray(ids) && ids.length ? new Set(ids) : null;
+      const at = new Date().toISOString();
+      const sent = [];
+      for (const c of b.comments) {
+        if (c.parent_id || c.resolved || c.sent_at) continue;
+        if (want && !want.has(c.id)) continue;
+        c.sent_at = at;
+        sent.push(c);
+      }
+      if (sent.length) this.save(data);
+      return sent;
+    });
+  }
+
+  /** A reply added after a thread was sent puts the thread back in the unsent pile. */
+  unsend(key, id) {
+    return this.withLock(() => {
+      const data = this.load();
+      const b = this.bucket(data, key);
+      const c = b.comments.find((x) => x.id === id);
+      if (!c || !c.sent_at) return false;
+      delete c.sent_at;
+      this.save(data);
+      return true;
     });
   }
 

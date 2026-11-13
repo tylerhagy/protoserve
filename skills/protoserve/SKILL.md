@@ -65,6 +65,8 @@ protoserve watch <file> --new
 
 One JSON object per line, emitted as each comment lands. Use this when the user wants you working alongside them rather than in a batch.
 
+If the user says they will "send to Claude", run `protoserve watch <file> --sent` in the background instead. It emits one `{"type":"sent","comments":[...]}` event each time they press Send to Claude in the page, with the full threads. Address those comments, then resolve or reply as usual. Never start this unprompted; sending is the user's opt-in.
+
 ## Other commands
 
 ```bash

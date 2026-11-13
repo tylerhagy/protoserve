@@ -39,6 +39,11 @@ Commands:
   protoserve delete <file> <id>...       Delete comments permanently
   protoserve reply <file> <id> <text>    Reply to a comment
   protoserve watch [file] [--new]        Stream comment events as JSONL
+  protoserve watch [file] --sent         Stream only what the reviewer sends from the page's
+                                         "Send to Claude" button: one JSON line per send, with
+                                         the comments fully resolved. Nothing else is emitted,
+                                         so an agent can run this in the background and start
+                                         work the moment a batch arrives.
   protoserve list                        List running protoserve instances
   protoserve kill <pid>... | --all       Stop running instances
 
@@ -297,9 +302,19 @@ function cmdReply(args) {
 
 function cmdWatch(args) {
   const onlyNew = args.includes('--new');
+  const onlySent = args.includes('--sent');
   const file = args.find((a) => !a.startsWith('-'));
   const t = target(file || process.cwd());
   const emit = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+
+  if (onlySent) {
+    /* Let the page know someone is listening, and take that back however we exit. */
+    const me = { pid: process.pid, root: path.resolve(t.root), file: file ? t.key : null };
+    instances.registerListener(me);
+    const leave = () => { instances.unregisterListener(process.pid); };
+    process.on('exit', leave);
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => { leave(); process.exit(0); });
+  }
 
   function snapshot() {
     const map = new Map();
@@ -317,7 +332,7 @@ function cmdWatch(args) {
   const inScope = (k) => !only || k.split('::')[0] === only;
 
   let prev = snapshot();
-  if (!onlyNew) {
+  if (!onlyNew && !onlySent) {
     for (const [k, c] of prev) {
       if (!c.resolved && inScope(k)) emit({ type: 'initial', file: k.split('::')[0], comment: c });
     }
@@ -330,6 +345,27 @@ function cmdWatch(args) {
     timer = setTimeout(() => {
       try {
       const next = snapshot();
+      if (onlySent) {
+        // One event per file per send: the comments whose sent_at is new since the last look.
+        const batches = new Map();
+        for (const [k, c] of next) {
+          if (!inScope(k) || c.parent_id || !c.sent_at) continue;
+          const before = prev.get(k);
+          if (before && before.sent_at === c.sent_at) continue;
+          const fileKey = k.split('::')[0];
+          if (!batches.has(fileKey)) batches.set(fileKey, []);
+          batches.get(fileKey).push(c);
+        }
+        for (const [fileKey, roots] of batches) {
+          const ids = new Set(roots.map((c) => c.id));
+          const withReplies = [];
+          for (const [, c] of next) if (ids.has(c.id) || ids.has(c.parent_id)) withReplies.push(c);
+          const ft = target(path.join(t.root, fileKey));
+          emit({ type: 'sent', file: fileKey, count: roots.length, comments: hydrate(ft, withReplies) });
+        }
+        prev = next;
+        return;
+      }
       for (const [k, c] of next) {
         if (!inScope(k)) continue;
         const before = prev.get(k);

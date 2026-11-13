@@ -19,6 +19,9 @@
   var elCache = new Map();
   var missGen = 0;
   var toastTimer = null;
+  var listening = 0;       // live `protoserve watch --sent` processes, as reported by the server
+  var barPos = null;       // where the toolbar was dragged to; null means its home corner
+  var dragging = false;
   var scopeOpen = false;   // the file menu in the panel header
   var pinEls = new Map();  // comment id -> its pin element, kept across renders
 
@@ -94,6 +97,7 @@
     edit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>',
     reply: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 015 5v2"/></svg>',
     close: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+    grip: '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="2.5" cy="3" r="1.3"/><circle cx="7.5" cy="3" r="1.3"/><circle cx="2.5" cy="8" r="1.3"/><circle cx="7.5" cy="8" r="1.3"/><circle cx="2.5" cy="13" r="1.3"/><circle cx="7.5" cy="13" r="1.3"/></svg>',
     chev: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
     tick: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
     camera: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>'
@@ -106,6 +110,13 @@
   // Neutralise the popover user-agent styles we inherit by joining the top layer.
   host.style.cssText = 'position:fixed;top:0;left:0;inset:auto;width:0;height:0;border:0;margin:0;' +
     'padding:0;background:transparent;overflow:visible;color:inherit;z-index:2147483647';
+  /* To the prototype, a click or focus inside our UI looks like one OUTSIDE its dialog: our host is
+     a different subtree, so a dialog that closes on outside-pointerdown, an outside-click handler,
+     or a focus trap reacts the moment you reach for the comment box. That is why commenting on
+     overlays kept dismissing them. Stopping these at the host, in the bubble phase, means our own
+     handlers (which sit below it) still run and nothing above us is told. */
+  ['pointerdown', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend', 'focusin', 'focusout']
+    .forEach(function (t) { host.addEventListener(t, function (e) { e.stopPropagation(); }); });
   var shadow = host.attachShadow({ mode: 'open' });
   var styleEl = document.createElement('style');
   styleEl.textContent = CFG.css || '';
@@ -171,6 +182,7 @@
   // A modal <dialog> makes the whole document outside it inert, so our UI would
   // render but refuse focus and clicks. Living inside the topmost modal while one
   // is open keeps the overlay usable; we move back out when it closes.
+  var CUSTOM_MODAL = '[role="dialog"], [role="alertdialog"], [aria-modal="true"]';
   function topmostModal() {
     var found = null;
     try {
@@ -181,6 +193,17 @@
         try { modal = d.matches(':modal'); } catch (e) { modal = true; }
         if (modal && !d.contains(host)) found = d;
         else if (modal && d.contains(host)) found = d;
+      }
+      if (found) return found; // a native modal sits above anything a framework can build
+      /* Frameworks (MUI, Radix, Headless UI) build their own dialogs out of divs. Those trap focus
+         and treat anything outside them as outside, so the overlay has to live inside the one that
+         is open, the same as it does for a native modal. Last in document order is the topmost:
+         portals append to the end of the body. */
+      var custom = document.querySelectorAll(CUSTOM_MODAL);
+      for (var j = 0; j < custom.length; j++) {
+        var c = custom[j];
+        if (c.localName === 'dialog') continue;
+        if (c.contains(host) || isVisible(c)) found = c;
       }
     } catch (e) { found = null; }
     return found;
@@ -196,13 +219,18 @@
   function watchTopLayer() {
     if (typeof MutationObserver !== 'function') return;
     var mo = new MutationObserver(function (muts) {
+      // A dialog that unmounts takes the overlay with it; come back at once, not on the next tick.
+      if (!host.isConnected) { syncHome(); raise(); return; }
       for (var i = 0; i < muts.length; i++) {
         var m = muts[i];
         if (m.target === host || (host.contains && host.contains(m.target))) continue;
         if (m.type === 'attributes') { syncHome(); raise(); return; }
         for (var j = 0; j < m.addedNodes.length; j++) {
           var n = m.addedNodes[j];
-          if (n.nodeType === 1 && (n.tagName === 'DIALOG' || n.hasAttribute('popover'))) { syncHome(); raise(); return; }
+          if (n.nodeType !== 1) continue;
+          var isModal = false;
+          try { isModal = !!(n.matches && (n.matches(CUSTOM_MODAL) || n.querySelector(CUSTOM_MODAL))); } catch (e) { isModal = false; }
+          if (n.tagName === 'DIALOG' || n.hasAttribute('popover') || isModal) { syncHome(); raise(); return; }
         }
       }
     });
@@ -476,15 +504,40 @@
       if (!cursorStyle) {
         cursorStyle = document.createElement('style');
         cursorStyle.setAttribute('data-protoserve', 'cursor');
-        cursorStyle.textContent = 'body, body * { cursor: crosshair !important; }';
+        /* A disabled control swallows the click: the browser never fires it at the control or at
+           anything above it, so a disabled button could not be commented on at all. Making them
+           transparent to the pointer sends the click to whatever is behind, and pointTarget()
+           below finds the control again from where the pointer is. */
+        cursorStyle.textContent = 'body, body * { cursor: crosshair !important; }' +
+          ' :disabled { pointer-events: none !important; }';
         document.head.appendChild(cursorStyle);
       }
     } else if (cursorStyle) {
       cursorStyle.remove();
       cursorStyle = null;
     }
-    if (mode === 'inspect') showHint(); else hideHint();
     render();
+  }
+
+  /* The element under the pointer, disabled controls included. e.target is the parent when the
+     pointer is over a disabled button (see the style in setMode), so look for a disabled control
+     inside it that actually contains the pointer and take the smallest, which is the innermost. */
+  function pointTarget(e) {
+    var el = e.target;
+    if (!el || el.nodeType !== 1) return el;
+    var best = null, bestArea = Infinity;
+    try {
+      var ds = el.querySelectorAll(':disabled');
+      for (var i = 0; i < ds.length; i++) {
+        var r = ds[i].getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue;
+        if (!isVisible(ds[i])) continue;
+        var area = r.width * r.height;
+        if (area < bestArea) { best = ds[i]; bestArea = area; }
+      }
+    } catch (err) { best = null; }
+    return best || el;
   }
 
   function onClickCapture(e) {
@@ -506,7 +559,7 @@
         return openCompose(a, rect, null);
       }
     }
-    var el = e.target;
+    var el = pointTarget(e);
     if (!el || el.nodeType !== 1) return;
     openCompose(anchorFrom(el), el.getBoundingClientRect(), null);
   }
@@ -518,7 +571,7 @@
   function onMove(e) {
     if (mode !== 'inspect') return;
     if (inHost(e)) return clearHover();
-    var el = e.target;
+    var el = pointTarget(e);
     if (!el || el.nodeType !== 1 || el === hoverEl) return;
     hoverEl = el;
     drawHover(el);
@@ -566,6 +619,7 @@
      the textarea because the guard stops key events at window — ahead of the prototype's shortcuts,
      and therefore ahead of our own listeners too — and calls this instead. */
   var cardKeys = null;
+  var cardInput = null;   // called after every edit to the open card's text, so a draft can be kept
   var FIELD_EVENTS = ['keydown', 'keyup', 'keypress', 'beforeinput', 'input',
     'compositionstart', 'compositionupdate', 'compositionend', 'paste', 'cut', 'copy'];
   function inField(e) {
@@ -577,6 +631,9 @@
     return n === 'textarea' || n === 'input' || t.isContentEditable === true;
   }
   function onFieldKey(e) {
+    // `input` is stopped at window by the guard like every other key event, so a listener on the
+    // textarea itself never hears it; this is the route a draft learns that the text changed.
+    if (e.type === 'input') { if (cardInput) cardInput(); return; }
     if (e.type !== 'keydown') return;
     if (e.key === 'Escape') { closeCards(); e.preventDefault(); return; }
     if (cardKeys) cardKeys(e);
@@ -597,7 +654,11 @@
 
   window.addEventListener('mousemove', onMove, true);
   window.addEventListener('scroll', function () { if (mode === 'inspect') clearHover(); layoutPins(); }, true);
-  window.addEventListener('resize', function () { clearHover(); layoutPins(); });
+  window.addEventListener('resize', function () {
+    clearHover(); layoutPins();
+    var b = root.querySelector('.ps-bar');
+    if (b) placeBar(b);
+  });
 
   /* Clicks that reach document: everything inside our own host, plus clicks on the prototype while
      comment mode is OFF. Comment mode's out-of-host clicks are handled in onClickCapture instead,
@@ -749,10 +810,20 @@
   }
 
   // ---------------------------------------------------------------- cards
+  /* A half-written comment survives a reload. An agent editing the file makes the page reload under
+     you, and retyping what you had was the single most annoying part of working alongside one. The
+     draft is kept per tab (sessionStorage), per keystroke, and goes the moment its card is closed
+     any other way: saved, cancelled, or replaced by another card. */
+  function keepDraft(d) { remember('draft', d); }
+  function dropDraft() { remember('draft', null); }
+  function rectOf(r) { return { left: r.left, top: r.top, bottom: r.bottom }; }
+
   function closeCards() {
     var cards = root.querySelectorAll('.ps-card');
     for (var i = 0; i < cards.length; i++) cards[i].remove();
     cardKeys = null;
+    cardInput = null;
+    dropDraft();
     activeId = null;
     renderPanel();
     renderPins();
@@ -773,11 +844,12 @@
     card.style.visibility = 'visible';
   }
 
-  function openCompose(anchor, rect, parentId) {
+  function openCompose(anchor, rect, parentId, initial) {
     if (panelOpen && window.innerWidth < 720) { panelOpen = false; remember('panel', false); }
     closeCards();
     var shot = captureSoon(5000);
     var ta = h('textarea', { placeholder: parentId ? 'Write a reply…' : 'What should change here?' });
+    if (initial) ta.value = initial;
     var btn = h('button', { class: 'ps-btn primary', text: parentId ? 'Reply' : 'Comment' });
     var card = h('div', { class: 'ps-card' }, [
       h('div', { class: 'ps-head' }, [
@@ -816,8 +888,15 @@
     // Both: the guard route normally fires, the direct one is the fallback if it never runs.
     cardKeys = onKey;
     ta.addEventListener('keydown', onKey);
+    var anchorRect = rectOf(rect);
+    function remind() {
+      if (!ta.value.trim()) return dropDraft();
+      keepDraft({ file: FILE, kind: 'compose', parentId: parentId || null, anchor: anchor, rect: anchorRect, text: ta.value });
+    }
+    cardInput = remind;
     place(card, rect);
     ta.focus();
+    if (initial) { ta.setSelectionRange(ta.value.length, ta.value.length); remind(); }
   }
 
   function openThread(id) {
@@ -874,12 +953,12 @@
     ]);
   }
 
-  function editComment(c) {
+  function editComment(c, initial) {
     var el = findEl(c);
     var rect = el && isVisible(el) ? el.getBoundingClientRect() : { left: 20, top: 70, bottom: 70 };
     closeCards();
     var ta = h('textarea');
-    ta.value = c.text;
+    ta.value = initial != null ? initial : c.text;
     var btn = h('button', { class: 'ps-btn primary', text: 'Save' });
     var card = h('div', { class: 'ps-card' }, [
       h('div', { class: 'ps-head' }, [
@@ -907,8 +986,34 @@
     }
     cardKeys = onKey;
     ta.addEventListener('keydown', onKey);
+    var editRect = rectOf(rect);
+    function remind() {
+      if (!ta.value.trim() || ta.value === c.text) return dropDraft();
+      keepDraft({ file: FILE, kind: 'edit', id: c.id, rect: editRect, text: ta.value });
+    }
+    cardInput = remind;
     place(card, rect);
     ta.focus();
+    if (initial != null) { ta.setSelectionRange(ta.value.length, ta.value.length); remind(); }
+  }
+
+  /* Put a draft back after a reload. Whatever it was attached to may have moved or gone, so the
+     element is looked for again and the old position is only the fallback. */
+  function restoreDraft(d) {
+    if (!d || d.file !== FILE || !d.text || !String(d.text).trim()) return;
+    var rect = d.rect || { left: 20, top: 70, bottom: 70 };
+    if (d.kind === 'edit') {
+      var c = comments.find(function (x) { return x.id === d.id; });
+      if (c) editComment(c, d.text);
+      return;
+    }
+    var probe = { id: '__draft__', anchor: d.anchor || {} };
+    elCache.delete('__draft__');
+    var el = findEl(probe);
+    elCache.delete('__draft__');
+    if (el && isVisible(el)) rect = el.getBoundingClientRect();
+    var parent = d.parentId && comments.some(function (x) { return x.id === d.parentId; }) ? d.parentId : null;
+    openCompose(d.anchor, rect, parent, d.text);
   }
 
   function toggleResolve(c) {
@@ -973,12 +1078,67 @@
   }
 
   // ---------------------------------------------------------------- render
+  /* Where the toolbar sits is the reviewer's call: it lands on a prototype's own action buttons
+     often enough that it has to be movable. The position is a preference, so it outlives the tab. */
+  var storedBar = kept('bar', null);
+  if (storedBar && typeof storedBar.x === 'number' && typeof storedBar.y === 'number') barPos = storedBar;
+
+  function placeBar(bar) {
+    if (!barPos) return;
+    var x = Math.min(Math.max(4, barPos.x), Math.max(4, window.innerWidth - bar.offsetWidth - 4));
+    var y = Math.min(Math.max(4, barPos.y), Math.max(4, window.innerHeight - bar.offsetHeight - 4));
+    bar.style.left = x + 'px'; bar.style.top = y + 'px';
+    bar.style.right = 'auto'; bar.style.bottom = 'auto';
+  }
+  function barGrip(bar) {
+    var grip = h('div', {
+      class: 'ps-grip', title: 'Drag to move \u00b7 double-click to reset',
+      'aria-label': 'Move toolbar', html: ICON.grip
+    });
+    grip.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var r = bar.getBoundingClientRect();
+      var dx = e.clientX - r.left, dy = e.clientY - r.top;
+      dragging = true;
+      bar.classList.add('dragging');
+      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* the window still gets the moves */ }
+      function move(ev) {
+        barPos = { x: ev.clientX - dx, y: ev.clientY - dy };
+        placeBar(bar);
+      }
+      function up() {
+        dragging = false;
+        bar.classList.remove('dragging');
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        try { grip.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+        if (barPos) {
+          var b = bar.getBoundingClientRect();
+          barPos = { x: Math.round(b.left), y: Math.round(b.top) };   // keep what is on screen, not the raw pointer
+          keep('bar', barPos);
+        }
+      }
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', function () {
+      barPos = null; keep('bar', null);
+      bar.style.left = bar.style.top = bar.style.right = bar.style.bottom = '';
+    });
+    return grip;
+  }
+
   function renderBar() {
+    if (dragging) return;            // a re-render mid-drag would drop the pointer capture
     var old = root.querySelector('.ps-bar');
     if (old) old.remove();
     var open = roots().filter(function (c) { return !c.resolved; }).length;
     var total = roots().length;
     var bar = h('div', { class: 'ps-bar' }, [
+      h('span', { class: 'ps-grip-slot' }),
       h('button', {
         class: mode === 'inspect' ? 'on' : '',
         title: 'Toggle comment mode (C)',
@@ -991,31 +1151,13 @@
         html: ICON.list + (total ? '<span class="ps-count">' + open + '</span>' : ''),
         onclick: function () {
           panelOpen = !panelOpen; remember('panel', panelOpen); render();
-          if (panelOpen) refreshScopes();   // the gate above skips it while the panel is shut
+          if (panelOpen) { refreshScopes(); refresh(); }   // the scope gate above skips it while the panel is shut
         }
       })
     ]);
+    bar.replaceChild(barGrip(bar), bar.firstChild);
     root.appendChild(bar);
-  }
-
-  var hintTimer = null;
-  function hideHint() {
-    clearTimeout(hintTimer);
-    var old = root.querySelector('.ps-hint');
-    if (old) old.remove();
-  }
-  function showHint() {
-    hideHint();
-    var hint = h('div', { class: 'ps-hint' }, [
-      h('span', { text: 'Click any element to comment · or select text' }),
-      h('kbd', { text: 'Esc' }),
-      h('span', { text: 'to exit' })
-    ]);
-    root.appendChild(hint);
-    hintTimer = setTimeout(function () {
-      hint.classList.add('fade');
-      setTimeout(function () { if (hint.parentNode) hint.remove(); }, 450);
-    }, 3600);
+    placeBar(bar);
   }
 
   /* Pins are PATCHED, not rebuilt. Recreating them on every render replayed the ps-pop entrance
@@ -1082,7 +1224,7 @@
           h('div', { class: 'ps-body', text: c.text }),
           anchorEl(c.anchor),
           h('div', { class: 'ps-meta' }, [
-            h('span', { text: ago(c.created_at) + (replies ? ' · ' + replies + ' repl' + (replies > 1 ? 'ies' : 'y') : '') }),
+            h('span', { text: ago(c.created_at) + (replies ? ' · ' + replies + ' repl' + (replies > 1 ? 'ies' : 'y') : '') + (c.sent_at && !c.resolved ? ' · sent' : '') }),
             /* filled in by syncRows when the anchor is not on the screen being looked at */
             h('span', { class: 'ps-where' })
           ])
@@ -1095,6 +1237,20 @@
        "which prototype is this?" actually belongs. What sits here now is the pin colour, which is
        the one preference in this UI and reads better as a quiet row of swatches than as a menu. */
     var foot = h('div', { class: 'ps-panel-foot' });
+    var unsent = unsentRoots().length;
+    var send = openCount ? h('div', { class: 'ps-send' }, [
+      h('button', {
+        class: 'ps-btn primary', text: unsent ? 'Send ' + unsent + ' to Claude' : 'All sent',
+        disabled: unsent ? null : 'true', onclick: sendToClaude
+      }),
+      h('span', {
+        class: 'ps-listen' + (listening ? ' on' : ''),
+        title: listening
+          ? 'Claude is watching this file and will start on what you send.'
+          : 'Nothing is watching yet. Ask Claude to run: protoserve watch ' + FILE + ' --sent',
+        text: listening ? 'Claude is watching' : 'Not watching'
+      })
+    ]) : null;
     var swatches = h('div', { class: 'ps-swatches' });
     PIN_COLORS.forEach(function (c) {
       swatches.appendChild(h('button', {
@@ -1171,6 +1327,7 @@
         ])
       ]),
       list,
+      send,
       foot
     ].filter(Boolean);
 
@@ -1200,9 +1357,27 @@
     renderPanel();
   }
 
+  function unsentRoots() {
+    return roots().filter(function (c) { return !c.resolved && !c.sent_at; });
+  }
+  /* Nothing here is automatic. Comments sit until you press this; the press stamps them as sent,
+     and a `protoserve watch --sent` running in the agent's session turns that into work. */
+  function sendToClaude() {
+    var ids = unsentRoots().map(function (c) { return c.id; });
+    if (!ids.length) return;
+    api('POST', '/send', { ids: ids })
+      .then(function (res) { return refresh().then(function () { return res; }); })
+      .then(function (res) {
+        var n = (res.sent || []).length;
+        toast(n + (n === 1 ? ' comment' : ' comments') + (listening ? ' sent to Claude' : ' sent. Nothing is watching yet'));
+      })
+      .catch(function (e) { toast('Could not send: ' + e.message); });
+  }
+
   function refresh() {
     return api('GET', '').then(function (res) {
       comments = res.comments || [];
+      listening = res.listening || 0;
       elCache.clear();
       render();
       return comments;
@@ -1260,18 +1435,20 @@
   }
 
   function boot() {
+    var pendingDraft = recall('draft', null);   // before anything below can close a card and drop it
     mount();
     applyPin();
     panelOpen = recall('panel', false) === true;
     if (recall('mode', 'interact') === 'inspect') setMode('inspect');
-    refresh();
+    refresh().then(function () { restoreDraft(pendingDraft); });
     refreshScopes();
     connect();
     watchDom();
     var tick = 0;
     setInterval(function () {
       tick++;
-      if (tick % 4 === 0) { syncHome(); applyTheme(); }   // self-heal + follow theme changes
+      syncHome();                                          // a dialog that hides must not strand us in it
+      if (tick % 4 === 0) applyTheme();                    // follow theme changes
       if (tick % 10 === 0) missGen++;                      // retry unresolved anchors
       layoutPins();
     }, 500);

@@ -29,7 +29,7 @@ const indexPath = () => path.join(root, 'index.html');
 
 test.before(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'protoserve-e2e-'));
-  for (const f of ['index.html', 'about.html', 'generated.html', 'screens.html']) {
+  for (const f of ['index.html', 'about.html', 'generated.html', 'screens.html', 'overlays.html']) {
     fs.copyFileSync(path.join(__dirname, 'fixtures/proto', f), path.join(root, f));
   }
   store = new Store(root);
@@ -109,8 +109,8 @@ test('the prototype stays interactive while comment mode is off', async () => {
 
 test('pressing C turns on comment mode', async () => {
   await page.keyboard.press('c');
-  await host('.ps-hint').waitFor({ timeout: 3000 });
-  assert.strictEqual(await page.evaluate(() => window.__protoserve.mode), 'inspect');
+  await page.waitForFunction(() => window.__protoserve.mode === 'inspect', null, { timeout: 3000 });
+  assert.strictEqual(await host('.ps-hint').count(), 0, 'no hint appears over the toolbar');
 });
 
 test('hovering an element shows a highlight labelled with its selector', async () => {
@@ -466,7 +466,7 @@ test('a symlink cannot be used to escape the served folder', async () => {
 function raw(opts, body) {
   const http = require('http');
   return new Promise((resolve) => {
-    const req = http.request(Object.assign({ host: '127.0.0.1', port }, opts), (res) => {
+    const req = http.request(Object.assign({ host: 'localhost', port }, opts), (res) => {
       let b = '';
       res.on('data', (c) => { b += c; });
       res.on('end', () => resolve({ status: res.statusCode, body: b }));
@@ -866,4 +866,97 @@ test('a comment whose element is deleted outright is still parked, not hidden', 
   assert.strictEqual(state.display, 'flex', 'a lost anchor is worth telling the reviewer about');
   assert.match(state.title, /gone from the page/);
   assert.match(state.where, /no longer on the page/);
+});
+
+async function openOverlays() {
+  await page.goto(`http://localhost:${port}/overlays.html`);
+  await host('.ps-bar').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__protoserve.setMode('interact'));   // mode is remembered across loads
+}
+
+test('the toolbar can be dragged, remembers where it went, and resets on double-click', async () => {
+  await openOverlays();
+  const before = await host('.ps-bar').boundingBox();
+  const grip = await host('.ps-grip').boundingBox();
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(300, 400, { steps: 5 });
+  await page.mouse.up();
+  const moved = await host('.ps-bar').boundingBox();
+  assert.ok(Math.abs(moved.x - before.x) > 50, 'toolbar moved');
+  await page.reload();
+  await host('.ps-bar').waitFor({ timeout: 10000 });
+  await page.waitForTimeout(500);
+  const kept = await host('.ps-bar').boundingBox();
+  assert.ok(Math.abs(kept.x - moved.x) < 3 && Math.abs(kept.y - moved.y) < 3, 'position survives reload');
+  await host('.ps-grip').dblclick();
+  const home = await host('.ps-bar').boundingBox();
+  assert.ok(Math.abs(home.x - before.x) < 3, 'double-click returns it home');
+});
+
+test('a disabled button can be commented on', async () => {
+  await openOverlays();
+  await page.keyboard.press('c');
+  await page.click('#off', { force: true });
+  await host('.ps-card textarea').waitFor({ timeout: 5000 });
+  await host('.ps-card textarea').fill('Why is this disabled?');
+  await page.keyboard.press('Control+Enter');
+  await page.waitForFunction(() => true);
+  await page.waitForTimeout(500);
+  const c = store.list('overlays.html').find((x) => x.text === 'Why is this disabled?');
+  assert.ok(c, 'comment saved');
+  assert.match(JSON.stringify(c.anchor || c), /off/, 'anchored to the disabled button');
+});
+
+test('commenting inside a dialog that dismisses on outside press does not close it', async () => {
+  await openOverlays();
+  await page.click('#open');
+  await page.keyboard.press('c');
+  await page.click('#dlgtext');
+  await host('.ps-card textarea').waitFor({ timeout: 5000 });
+  await host('.ps-card textarea').click();
+  await host('.ps-card textarea').fill('Say what is discarded.');
+  assert.strictEqual(await page.evaluate(() => window.__outside), 0, 'framework never saw an outside press');
+  assert.strictEqual(await page.isVisible('#dlg'), true, 'dialog still open');
+});
+
+test('an unsent draft comment survives a live reload', async () => {
+  await openOverlays();
+  await page.keyboard.press('c');
+  await page.click('h1');
+  await host('.ps-card textarea').waitFor({ timeout: 5000 });
+  await host('.ps-card textarea').fill('half a thought');
+  const file = path.join(root, 'overlays.html');
+  const src = fs.readFileSync(file, 'utf8');
+  await page.evaluate(() => { window.__b = 1; });
+  fs.writeFileSync(file, src.replace('<h1>Overlays</h1>', '<h1>Overlays two</h1>'));
+  await page.waitForFunction(() => window.__b === undefined, null, { timeout: 8000 });
+  await host('.ps-card textarea').waitFor({ timeout: 8000 });
+  assert.strictEqual(await host('.ps-card textarea').inputValue(), 'half a thought');
+  fs.writeFileSync(file, src);
+});
+
+test('send stamps open comments, `watch --sent` reports them, and the page shows a listener', async () => {
+  await openOverlays();
+  const { spawn } = require('child_process');
+  const w = spawn(process.execPath, [CLI, 'watch', path.join(root, 'overlays.html'), '--sent'], { cwd: root });
+  let out = '';
+  w.stdout.on('data', (d) => { out += d; });
+  await page.waitForTimeout(1200);
+  try {
+    const res = await page.evaluate(async () => {
+      const r = await fetch('/__protoserve/api/comments?file=overlays.html');
+      return r.json();
+    });
+    assert.ok(res.listening >= 1, 'server reports the watcher');
+    const open = store.list('overlays.html').filter((c) => !c.parent_id && !c.resolved && !c.sent_at);
+    assert.ok(open.length >= 1, 'there is something to send');
+    const r = await page.evaluate(async () => (await fetch('/__protoserve/api/comments/send?file=overlays.html', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status);
+    assert.strictEqual(r, 200);
+    await page.waitForTimeout(1500);
+    assert.match(out, /"type":"sent"/, 'watch emitted a sent event');
+    assert.ok(store.list('overlays.html').every((c) => c.parent_id || c.resolved || c.sent_at), 'all stamped');
+  } finally { w.kill(); }
 });

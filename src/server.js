@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { annotate, injectScript } = require('./annotate');
 const { Store, relKey, DIR_NAME, LOCK_NAME } = require('./store');
+const instances = require('./instances');
 
 const CLIENT_DIR = path.join(__dirname, 'client');
 const API_ROOT = '/__protoserve/api/comments';
@@ -274,7 +275,19 @@ function createServer(root, opts) {
 
       try {
         if (req.method === 'GET') {
-          return sendJson(res, 200, { file: key, comments: store.list(key) });
+          // `listening`: live `protoserve watch --sent` processes for this file, so the page can say
+          // whether anyone is on the other end of the Send button.
+          return sendJson(res, 200, {
+            file: key, comments: store.list(key),
+            listening: instances.listenersFor(path.resolve(root), key)
+          });
+        }
+        if (req.method === 'POST' && id === 'send') {
+          // Explicit, never automatic: nothing reaches the agent until this is called.
+          const body = await readBody(req, res);
+          const sent = store.markSent(key, Array.isArray(body.ids) ? body.ids : null);
+          if (sent.length) broadcast('comments', { file: key });
+          return sendJson(res, 200, { sent: sent.map((c) => c.id) });
         }
         if (req.method === 'POST' && id === 'restore') {
           const body = await readBody(req, res);
@@ -298,6 +311,7 @@ function createServer(root, opts) {
             const rel = store.attachShot(key, created.id, body.screenshot);
             if (rel) created.screenshot = rel;
           }
+          if (created.parent_id) store.unsend(key, created.parent_id);
           broadcast('comments', { file: key });
           return sendJson(res, 200, created);
         }

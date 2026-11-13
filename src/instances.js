@@ -63,4 +63,42 @@ function verify(entry, timeout) {
   });
 }
 
-module.exports = { read, register, unregister, alive, verify, FILE };
+/* Agents that are watching for sent comments. Kept apart from the server registry above: a
+   listener is a `protoserve watch --sent` process, not a server, and the page only needs to know
+   whether anyone is on the other end of the Send button. Same home-folder file convention, so it
+   never lands in a project's git status. */
+const LISTENERS = path.join(os.homedir(), '.protoserve-listeners.json');
+
+function readListeners() {
+  try {
+    const list = JSON.parse(fs.readFileSync(LISTENERS, 'utf8'));
+    if (!Array.isArray(list)) return [];
+    return list.filter((i) => i && typeof i.pid === 'number' && typeof i.root === 'string' && alive(i.pid));
+  } catch { return []; }
+}
+
+function writeListeners(list) {
+  try {
+    const tmp = LISTENERS + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(list));
+    fs.renameSync(tmp, LISTENERS);
+  } catch { /* a convenience, never load-bearing */ }
+}
+
+function registerListener(entry) {
+  writeListeners(readListeners().filter((i) => i.pid !== entry.pid).concat([entry]));
+}
+
+function unregisterListener(pid) {
+  writeListeners(readListeners().filter((i) => i.pid !== pid));
+}
+
+/** How many live watchers would pick up a send for this file. A watcher with no file takes any. */
+function listenersFor(root, file) {
+  return readListeners().filter((i) => i.root === root && (!i.file || i.file === file)).length;
+}
+
+module.exports = {
+  read, register, unregister, alive, verify, FILE,
+  registerListener, unregisterListener, listenersFor
+};

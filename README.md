@@ -108,7 +108,13 @@ Everything an agent needs to act without asking you a follow-up question:
 | Numbered pin | Click to open that thread |
 | List button | All comments, filtered by Open / Resolved |
 
-Comment mode and the comment list survive a live reload, so when your agent edits the file mid-review you carry on where you were.
+Comment mode, the comment list and any comment you are halfway through typing survive a live reload, so when your agent edits the file mid-review you carry on where you were.
+
+The toolbar can be moved: drag its grip and it stays where you put it (double-click the grip to send it home). Disabled buttons and elements inside dialogs and overlays can be commented on like anything else.
+
+### Send to Claude (opt-in)
+
+Nothing is sent by default. When you want your agent to start on your comments without you telling it in the session, open the comment list and press **Send to Claude**. Every open comment you haven't sent yet is stamped as sent. An agent running `protoserve watch <file> --sent` picks them up and starts working; the list shows **Claude is watching** when one is running and **Not watching** when none is. A thread that changes after it was sent (edited text or a new reply) goes back to unsent.
 
 ### Switching prototypes
 
@@ -148,12 +154,12 @@ protoserve resolve <file> <id>...                         Mark resolved
 protoserve unresolve <file> <id>...                       Reopen
 protoserve delete <file> <id>...                          Delete permanently
 protoserve reply <file> <id> <text>                       Reply on a thread
-protoserve watch [file] [--new]                           Stream events as JSONL
+protoserve watch [file] [--new | --sent]                  Stream events as JSONL
 protoserve list                                           Running instances
 protoserve kill <pid>... | --all                          Stop instances
 ```
 
-`protoserve watch <file> --new` prints one JSON object per line as comments land. Park it on stdout if you want your agent reacting to feedback as you type it rather than in a batch.
+`protoserve watch <file> --new` prints one JSON object per line as comments land. Park it on stdout if you want your agent reacting to feedback as you type it rather than in a batch. `--sent` is the opt-in version: it emits one `{"type":"sent", ...}` event, with the full threads, each time you press Send to Claude, and nothing before.
 
 ---
 

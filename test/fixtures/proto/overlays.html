@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Overlays</title></head>
+<body>
+<main>
+  <h1>Overlays</h1>
+  <button id="off" disabled>Submit</button>
+  <button id="open" onclick="document.getElementById('dlg').style.display='block';window.__outside=0">Open</button>
+</main>
+<div id="dlg" role="dialog" aria-modal="true" style="display:none;position:fixed;top:120px;left:200px;padding:24px;background:#fff;border:1px solid #888;z-index:50">
+  <p id="dlgtext">Discard changes?</p>
+</div>
+<script>
+  // Like MUI/Radix: anything pressed outside the dialog dismisses it.
+  ['mousedown', 'pointerdown', 'focusin', 'click'].forEach(function (t) { document.addEventListener(t, function (e) {
+    var d = document.getElementById('dlg');
+    if (d.style.display !== 'none' && !d.contains(e.target) && e.target.id !== 'open') {
+      window.__outside++; d.style.display = 'none';
+    }
+  }, true); });
+</script>
+</body></html>
